@@ -1,0 +1,75 @@
+[project]
+name = "callais-local"
+workspace = "../.."
+
+[case]
+docket = "24-109"
+term = [2025]
+
+[paths]
+archive_dir = "archive/scotus-audio"
+transcript_output_dir = "transcript-output"
+alignment_output_dir = "alignment-output"
+timeline_output_dir = "timeline-output"
+profiles_output_dir = "profiles-output"
+viewer_output_dir = "viewer-output"
+state_dir = "pipeline-v2/.state"
+log_dir = "pipeline-v2/.logs"
+
+[steps]
+archive = true
+extract_transcript = true
+build_timeline = true
+run_alignment = true
+merge_alignment = true
+align_official_words = true
+refine_speech_gaps = true
+build_profiles = true
+build_viewer = true
+apply_qa_markers = false
+
+[archive]
+include_transcripts = true
+overwrite = false
+rate_limit_seconds = 0.5
+retries = 3
+timeout_seconds = 60
+
+[alignment]
+enabled = true
+chunk_seconds = 300.0
+workers = 2
+model_size = "tiny.en"
+max_bad_ratio = 0.5
+stop_on_warning = false
+overwrite = false
+
+[official_words]
+method = "asr"
+overwrite = false
+apply_low_quality = false
+progress_every = 5
+
+[qa]
+enabled = false
+markers = []
+enforce_order = false
+min_order_gap = 0.0
+
+[runtime]
+resume = true
+max_retries = 0
+quiet = false
+emit_subprocess_output = true
+processor = "uv"
+uv_executable = "uv"
+uv_groups = ["audio"]
+
+[[notifications]]
+type = "console"
+level = "info"
+
+[[notifications]]
+type = "jsonl"
+level = "debug"
+path = "pipeline-v2/.logs/events.jsonl"
