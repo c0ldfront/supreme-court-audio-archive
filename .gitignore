@@ -1,0 +1,13 @@
+.venv/
+.env
+__pycache__/
+*.py[cod]
+
+archive/
+artifacts/
+audio-test-output/
+transcript-output/
+timeline-output/
+alignment-output/
+profiles-output/
+viewer-output/
