@@ -618,13 +618,17 @@ def interpolate_missing_words(
 
     first = known[0]
     first_start = float(words[first]["start"])  # type: ignore[index]
+    leading_step = args.min_word_seconds
+    if first >= args.long_interpolation_min_words:
+        leading_step = max(args.min_word_seconds, 1.0 / args.long_interpolation_words_per_second)
+    leading_start = max(0.0, first_start - leading_step * first)
     for index in range(first - 1, -1, -1):
-        next_start = float(words[index + 1]["start"]) if words[index + 1] else first_start
-        word_start = max(0.0, next_start - args.min_word_seconds)
+        word_start = leading_start + leading_step * index
+        word_end = leading_start + leading_step * (index + 1)
         words[index] = {
             "word": tokens[index].word,
             "start": round(word_start, 3),
-            "end": round(next_start, 3),
+            "end": round(word_end, 3),
             "score": None,
             "interpolated": True,
             "source": "official_block_word_interpolation",
@@ -1137,6 +1141,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-mean-word-score", type=float, default=0.35)
     parser.add_argument("--min-apply-mean-word-score", type=float, default=0.35)
     parser.add_argument("--min-word-seconds", type=float, default=0.08)
+    parser.add_argument("--long-interpolation-min-words", type=int, default=12)
+    parser.add_argument("--long-interpolation-words-per-second", type=float, default=3.0)
     parser.add_argument("--max-turn-overlap-seconds", type=float, default=1.0)
     parser.add_argument("--max-token-scan", type=int, default=12)
     parser.add_argument("--min-token-match-ratio", type=float, default=0.78)

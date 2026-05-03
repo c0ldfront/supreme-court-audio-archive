@@ -188,6 +188,12 @@ def refine_segments(
         if original_end > last_speech_end and original_end - last_speech_end >= snap_gap_seconds:
             new_end = last_speech_end
 
+        word_start, word_end = word_time_bounds(segment)
+        if word_start is not None and word_start < new_start:
+            new_start = word_start
+        if word_end is not None and word_end > new_end:
+            new_end = word_end
+
         if new_end - new_start < min_segment_seconds:
             flags.append(
                 {
@@ -222,6 +228,27 @@ def refine_segments(
             }
         refined.append(revised)
     return refined, flags
+
+
+def word_time_bounds(segment: dict[str, Any]) -> tuple[float | None, float | None]:
+    words = segment.get("words")
+    if not isinstance(words, list):
+        return None, None
+    starts: list[float] = []
+    ends: list[float] = []
+    for word in words:
+        if not isinstance(word, dict):
+            continue
+        try:
+            start = float(word["start"])
+            end = float(word["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        starts.append(start)
+        ends.append(end)
+    if not starts or not ends:
+        return None, None
+    return min(starts), max(ends)
 
 
 def refine_timeline(args: argparse.Namespace) -> Path:
