@@ -1,110 +1,18 @@
 ---
-import "../../../../styles/global.css";
+import ViewerShell from "../../../../components/ViewerShell.astro";
+import BaseLayout from "../../../../layouts/BaseLayout.astro";
 
 const base = import.meta.env.BASE_URL;
 const dataRoot = `${base}data/cases/2025/24-109`;
 ---
 
-<!doctype html>
-<html lang="en" data-theme="dark">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Static viewer for Louisiana v. Callais Supreme Court oral argument audio." />
-    <title>Louisiana v. Callais · SCOTUS Viewer</title>
-  </head>
-  <body>
-    <div
-      id="viewer-root"
-      class="viewer-shell"
-      data-base={base}
-      data-timeline-url={`${dataRoot}/timeline.json`}
-      data-profiles-url={`${dataRoot}/profiles.json`}
-    >
-      <aside class="sidebar" aria-label="Case speakers and controls">
-        <div class="case-block">
-          <a class="back-link" href={base} aria-label="Back to archive">Archive</a>
-          <div class="title-row">
-            <div>
-              <h1 id="case-title">Loading case</h1>
-              <div class="case-meta" id="case-meta">Preparing viewer data...</div>
-            </div>
-            <button class="icon-button" id="theme-toggle" type="button" title="Toggle theme" aria-label="Toggle theme">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 3v2.2M12 18.8V21M4.8 4.8l1.6 1.6M17.6 17.6l1.6 1.6M3 12h2.2M18.8 12H21M4.8 19.2l1.6-1.6M17.6 6.4l1.6-1.6" />
-                <circle cx="12" cy="12" r="4.2" />
-              </svg>
-            </button>
-          </div>
-        </div>
+<BaseLayout
+  title="Louisiana v. Callais · SCOTUS Viewer"
+  description="Static viewer for Louisiana v. Callais Supreme Court oral argument audio."
+>
+  <ViewerShell base={base} dataRoot={dataRoot} />
 
-        <section class="audio-panel" aria-label="Playback">
-          <audio id="audio" controls preload="metadata"></audio>
-          <div class="time-line">
-            <span id="current-time">0:00</span>
-            <input id="seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Seek audio" />
-            <span id="duration">0:00</span>
-          </div>
-          <div class="control-grid">
-            <label>
-              Word offset
-              <input id="word-offset" type="number" value="0.00" step="0.05" inputmode="decimal" />
-            </label>
-            <label class="check">
-              <input id="auto-follow" type="checkbox" checked />
-              Follow transcript
-            </label>
-            <label class="check">
-              <input id="qa-mode" type="checkbox" />
-              QA markers
-            </label>
-          </div>
-        </section>
-
-        <section class="now-card" id="now-card" aria-label="Current speaker"></section>
-        <section class="speaker-list" id="speaker-list" aria-label="Speakers"></section>
-      </aside>
-
-      <main class="main-panel">
-        <section class="toolbar" aria-label="Transcript tools">
-          <div class="search-box">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="11" cy="11" r="6.5"></circle>
-              <path d="m16 16 4 4"></path>
-            </svg>
-            <input id="search" type="search" placeholder="Search transcript" autocomplete="off" />
-          </div>
-          <button class="text-button" id="export-markers" type="button">Export QA JSON</button>
-        </section>
-
-        <section class="timeline-panel" aria-label="Argument timeline">
-          <div class="timeline-header">
-            <h2>Argument Timeline</h2>
-            <span id="timeline-summary">Loading...</span>
-          </div>
-          <div class="tracks" id="tracks"></div>
-        </section>
-
-        <section class="transcript-panel" aria-label="Transcript">
-          <div class="transcript-list" id="transcript-list"></div>
-        </section>
-      </main>
-
-      <dialog id="qa-dialog" class="qa-dialog">
-        <form method="dialog">
-          <header>
-            <h2>QA marker export</h2>
-            <button class="icon-button" type="submit" aria-label="Close">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
-            </button>
-          </header>
-          <textarea id="qa-json" spellcheck="false"></textarea>
-        </form>
-      </dialog>
-    </div>
-
-    <script>
-      import "../../../../scripts/viewer.ts";
-    </script>
-  </body>
-</html>
+  <script>
+    import "../../../../scripts/viewer.ts";
+  </script>
+</BaseLayout>

@@ -1,0 +1,17 @@
+---
+import CaseHeader from "./CaseHeader.astro";
+import PlaybackControls from "./PlaybackControls.astro";
+
+interface Props {
+  base: string;
+}
+
+const { base } = Astro.props;
+---
+
+<aside class="sidebar" aria-label="Case speakers and controls">
+  <CaseHeader base={base} />
+  <PlaybackControls />
+  <section class="now-card" id="now-card" aria-label="Current speaker"></section>
+  <section class="speaker-list" id="speaker-list" aria-label="Speakers"></section>
+</aside>

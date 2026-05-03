@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-import sys
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -41,7 +41,6 @@ class PipelineRunner:
         state_path = self.workspace / config.paths.state_dir / f"{config.project.name}.state.json"
         self.state_store = StateStore(state_path)
         self.state = self.state_store.load_or_create(run_id=uuid4().hex, config_path=self.config_path)
-        python_executable = self._resolve_runtime_python(config.runtime.python_executable)
         self.context = PipelineContext(
             config=config,
             workspace=self.workspace,
@@ -49,21 +48,7 @@ class PipelineRunner:
             event_bus=self.event_bus,
             state=self.state,
             dry_run=dry_run,
-            python_executable=python_executable,
         )
-
-    def _default_python(self) -> Path:
-        workspace_python = self.workspace / ".venv" / "bin" / "python"
-        if workspace_python.exists():
-            return workspace_python.resolve()
-        return Path(sys.executable).resolve()
-
-    def _resolve_runtime_python(self, python_executable: Path | None) -> Path:
-        if not python_executable:
-            return self._default_python()
-        if python_executable.is_absolute():
-            return python_executable.resolve()
-        return (self.workspace / python_executable).resolve()
 
     def _resolve_workspace(self, workspace: Path) -> Path:
         if workspace.is_absolute():
@@ -99,26 +84,25 @@ class PipelineRunner:
         self._resolve_artifacts_if_possible()
         planned: list[dict[str, object]] = []
         for step in self.steps():
-            command: list[str]
             outputs: list[str]
             try:
-                command = step.command(self.context)
                 outputs = [str(path) for path in step.outputs(self.context)]
             except Exception:
-                command = []
                 outputs = []
             planned.append(
                 {
                     "id": step.step_id,
                     "title": step.title,
                     "enabled": step.enabled,
-                    "command": command,
+                    "processor": step.processor_name(),
                     "outputs": outputs,
                 }
             )
         return planned
 
     def run(self, *, only_step: str | None = None, from_step: str | None = None) -> int:
+        previous_cwd = Path.cwd()
+        os.chdir(self.workspace)
         started = dt.datetime.now(dt.UTC)
         try:
             steps = self._filter_steps(self.steps(), only_step=only_step, from_step=from_step)
@@ -220,6 +204,8 @@ class PipelineRunner:
                 severity=Severity.error,
             )
             return 1
+        finally:
+            os.chdir(previous_cwd)
 
     def _prepare_artifacts_for_run(self, steps: list[PipelineStep]) -> None:
         if self.config.case.case_dir:

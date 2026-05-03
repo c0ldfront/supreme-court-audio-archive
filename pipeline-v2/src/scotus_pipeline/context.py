@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from scotus_pipeline.config import PipelineConfig
 from scotus_pipeline.events import EventBus
@@ -23,7 +22,6 @@ class PipelineContext(BaseModel):
     state: PipelineState
     dry_run: bool = False
     artifacts: CaseArtifacts | None = None
-    python_executable: Path = Field(default_factory=lambda: Path(sys.executable))
 
     def resolve(self, path: Path) -> Path:
         if path.is_absolute():
@@ -32,17 +30,6 @@ class PipelineContext(BaseModel):
 
     def read_json(self, path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
-
-    def processor_command(self, script: str) -> list[str]:
-        runtime = self.config.runtime
-        if runtime.processor == "uv":
-            command = [runtime.uv_executable, "run"]
-            for group in runtime.uv_groups:
-                command.extend(["--group", group])
-            command.extend(["python", script])
-            return command
-        return [str(self.python_executable), script]
-
 
 def build_artifacts_from_case_dir(context: PipelineContext, case_dir: Path) -> CaseArtifacts:
     case_dir = context.resolve(case_dir)

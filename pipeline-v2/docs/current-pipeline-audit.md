@@ -1,7 +1,7 @@
 # Current Pipeline Audit
 
-This audit covers the existing workflow in the repository root, especially
-`run_pipeline.sh` and `scripts/13_run_case_pipeline.py`.
+This audit covers the legacy workflow in the repository root, especially
+`run_pipeline.sh` and the numbered case-pipeline runner.
 
 ## What Works
 

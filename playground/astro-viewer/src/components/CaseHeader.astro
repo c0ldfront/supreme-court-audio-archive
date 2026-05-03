@@ -1,0 +1,23 @@
+---
+interface Props {
+  base: string;
+}
+
+const { base } = Astro.props;
+---
+
+<div class="case-block">
+  <a class="back-link" href={base} aria-label="Back to archive">Archive</a>
+  <div class="title-row">
+    <div>
+      <h1 id="case-title">Loading case</h1>
+      <div class="case-meta" id="case-meta">Preparing viewer data...</div>
+    </div>
+    <button class="icon-button" id="theme-toggle" type="button" title="Toggle theme" aria-label="Toggle theme">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3v2.2M12 18.8V21M4.8 4.8l1.6 1.6M17.6 17.6l1.6 1.6M3 12h2.2M18.8 12H21M4.8 19.2l1.6-1.6M17.6 6.4l1.6-1.6" />
+        <circle cx="12" cy="12" r="4.2" />
+      </svg>
+    </button>
+  </div>
+</div>

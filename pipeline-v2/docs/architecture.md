@@ -6,7 +6,9 @@
 - `PipelineRunner`: application service that resolves workspace, state, steps,
   and event delivery.
 - `PipelineStep`: template-method base class for step lifecycle handling.
-- `PythonProcessExecutor`: process boundary for long-running Python processors.
+- `processors._native`: in-package processor modules for archive, transcript,
+  timeline, alignment, merge, official word alignment, speech-gap refinement,
+  speaker profiles, QA marker application, and static viewer rendering.
 - `EventBus`: publish/subscribe lifecycle events for progress and notifications.
 - `Notifier`: strategy interface for console, JSONL, and webhook delivery.
 - `StateStore`: repository for resumable run state.
@@ -17,14 +19,18 @@
 2. Emit `step.planned` and `step.progress`.
 3. Apply skip policy.
 4. Emit `step.started`.
-5. Execute Python processor or dry-run plan.
+5. Execute the native in-package Python processor or dry-run plan.
 6. Emit `step.completed` or `step.failed`.
 7. Persist `StepResult` when not in dry-run mode.
 
-## Migration Boundary
+## Isolation Boundary
 
-The v2 runner is isolated from the legacy shell workflow. It currently executes
-Python processors through an explicit executor so long-running GPU/audio work
-has a process boundary. The runner, config, progress, notifications, and state
-model do not depend on the old orchestration shape and can support native step
-implementations as they are ported.
+The v2 runner does not call the repository root numbered processors. Step
+classes call modules under `scotus_pipeline.processors._native` directly, and
+the CLI plan reports the processor class instead of a shell command.
+
+External command use is limited to domain tools such as `pdftotext`, `ffprobe`,
+and `ffmpeg`, plus optional in-process ASR libraries (`whisperx`/`torch`) when
+alignment work needs fresh speech recognition. Cache validation includes the
+speaker-turn source path so a stale chunk from a different docket is rejected
+instead of being merged into the current case.

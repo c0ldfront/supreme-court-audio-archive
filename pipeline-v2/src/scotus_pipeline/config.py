@@ -91,11 +91,6 @@ class RuntimeConfig(StrictModel):
     resume: bool = True
     max_retries: int = Field(default=0, ge=0)
     quiet: bool = False
-    emit_subprocess_output: bool = True
-    processor: Literal["uv", "python"] = "uv"
-    uv_executable: str = "uv"
-    uv_groups: list[str] = Field(default_factory=lambda: ["audio"])
-    python_executable: Path | None = None
 
 
 class NotificationType(StrEnum):

@@ -1,0 +1,22 @@
+<section class="audio-panel" aria-label="Playback">
+  <audio id="audio" controls preload="metadata"></audio>
+  <div class="time-line">
+    <span id="current-time">0:00</span>
+    <input id="seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Seek audio" />
+    <span id="duration">0:00</span>
+  </div>
+  <div class="control-grid">
+    <label>
+      Word offset
+      <input id="word-offset" type="number" value="0.00" step="0.05" inputmode="decimal" />
+    </label>
+    <label class="check">
+      <input id="auto-follow" type="checkbox" checked />
+      Follow transcript
+    </label>
+    <label class="check">
+      <input id="qa-mode" type="checkbox" />
+      QA markers
+    </label>
+  </div>
+</section>

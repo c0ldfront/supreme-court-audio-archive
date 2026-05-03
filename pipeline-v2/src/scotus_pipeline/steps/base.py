@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import traceback
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
 from scotus_pipeline.context import PipelineContext
 from scotus_pipeline.events import EventType, Severity
-from scotus_pipeline.executor import CommandResult, PythonProcessExecutor
 from scotus_pipeline.models import StepResult, StepStatus
 
 
@@ -22,8 +23,11 @@ class PipelineStep(ABC):
     def outputs(self, context: PipelineContext) -> list[Path]:
         raise NotImplementedError
 
+    def processor_name(self) -> str:
+        return f"{self.__class__.__module__}.{self.__class__.__name__}"
+
     @abstractmethod
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         raise NotImplementedError
 
     def should_skip(self, context: PipelineContext) -> tuple[bool, str | None]:
@@ -36,7 +40,7 @@ class PipelineStep(ABC):
     def validate_success(
         self,
         context: PipelineContext,
-        result: CommandResult,
+        metadata: dict[str, Any],
     ) -> tuple[bool, str | None, dict[str, object]]:
         return True, None, {}
 
@@ -44,7 +48,7 @@ class PipelineStep(ABC):
         started_at = dt.datetime.now(dt.UTC).isoformat()
         start = time.monotonic()
         should_skip, reason = self.should_skip(context)
-        command = self.command(context)
+        processor = self.processor_name()
         if should_skip:
             context.event_bus.emit(
                 EventType.step_skipped,
@@ -57,16 +61,15 @@ class PipelineStep(ABC):
                 started_at=started_at,
                 finished_at=dt.datetime.now(dt.UTC).isoformat(),
                 duration_seconds=0.0,
-                command=command,
                 outputs=self.outputs(context),
-                metadata={"reason": reason},
+                metadata={"reason": reason, "processor": processor},
             )
 
         context.event_bus.emit(
             EventType.step_started,
             self.title,
             step_id=self.step_id,
-            data={"command": command},
+            data={"processor": processor},
         )
 
         if context.dry_run:
@@ -82,25 +85,20 @@ class PipelineStep(ABC):
                 started_at=started_at,
                 finished_at=dt.datetime.now(dt.UTC).isoformat(),
                 duration_seconds=0.0,
-                command=command,
                 outputs=self.outputs(context),
-                metadata={"dry_run": True},
+                metadata={"dry_run": True, "processor": processor},
             )
 
-        executor = PythonProcessExecutor(
-            cwd=context.workspace,
-            event_bus=context.event_bus,
-            quiet=context.config.runtime.quiet,
-            emit_output=context.config.runtime.emit_subprocess_output,
-        )
-        result = executor.run(command, step_id=self.step_id)
-        duration = time.monotonic() - start
-        if result.return_code != 0:
+        try:
+            metadata = self.execute(context)
+        except Exception as exc:
+            duration = time.monotonic() - start
             context.event_bus.emit(
                 EventType.step_failed,
-                f"{self.title} failed with exit code {result.return_code}",
+                f"{self.title} failed: {exc}",
                 severity=Severity.error,
                 step_id=self.step_id,
+                data={"error": str(exc), "processor": processor},
             )
             return StepResult(
                 step_id=self.step_id,
@@ -108,12 +106,17 @@ class PipelineStep(ABC):
                 started_at=started_at,
                 finished_at=dt.datetime.now(dt.UTC).isoformat(),
                 duration_seconds=duration,
-                command=result.command,
                 outputs=self.outputs(context),
-                metadata={"return_code": result.return_code},
+                metadata={
+                    "error": str(exc),
+                    "processor": processor,
+                    "traceback": traceback.format_exc().splitlines()[-20:],
+                },
             )
 
-        valid, validation_error, validation_metadata = self.validate_success(context, result)
+        duration = time.monotonic() - start
+        metadata = {"processor": processor, **metadata}
+        valid, validation_error, validation_metadata = self.validate_success(context, metadata)
         if not valid:
             message = validation_error or f"{self.title} failed validation"
             context.event_bus.emit(
@@ -129,16 +132,15 @@ class PipelineStep(ABC):
                 started_at=started_at,
                 finished_at=dt.datetime.now(dt.UTC).isoformat(),
                 duration_seconds=duration,
-                command=result.command,
                 outputs=self.outputs(context),
-                metadata={"return_code": result.return_code, **validation_metadata},
+                metadata={**metadata, **validation_metadata},
             )
 
         context.event_bus.emit(
             EventType.step_completed,
             f"{self.title} completed in {duration:.1f}s",
             step_id=self.step_id,
-            data={"duration_seconds": duration, **validation_metadata},
+            data={"duration_seconds": duration, **metadata, **validation_metadata},
         )
         return StepResult(
             step_id=self.step_id,
@@ -146,7 +148,6 @@ class PipelineStep(ABC):
             started_at=started_at,
             finished_at=dt.datetime.now(dt.UTC).isoformat(),
             duration_seconds=duration,
-            command=result.command,
             outputs=self.outputs(context),
-            metadata={"return_code": result.return_code, **validation_metadata},
+            metadata={**metadata, **validation_metadata},
         )

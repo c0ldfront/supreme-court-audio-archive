@@ -1,10 +1,35 @@
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from scotus_pipeline.context import PipelineContext
-from scotus_pipeline.executor import CommandResult
+from scotus_pipeline.events import EventType, Severity
+from scotus_pipeline.processors.contracts import (
+    AlignmentChunksProcessorInput,
+    ArchiveProcessorInput,
+    BuildTimelineProcessorInput,
+    MergeAlignmentProcessorInput,
+    OfficialWordsProcessorInput,
+    QaMarkersProcessorInput,
+    SpeakerProfilesProcessorInput,
+    SpeechGapsProcessorInput,
+    ViewerProcessorInput,
+)
+from scotus_pipeline.processors._native import (
+    alignment_chunks,
+    archive_audio,
+    build_timeline,
+    case_viewer,
+    extract_transcript,
+    merge_alignments,
+    official_words,
+    qa_markers,
+    speaker_profiles,
+    speech_gaps,
+)
 from scotus_pipeline.steps.base import PipelineStep
 
 
@@ -15,28 +40,30 @@ class ArchiveStep(PipelineStep):
     def outputs(self, context: PipelineContext) -> list[Path]:
         return [context.resolve(context.config.paths.archive_dir)]
 
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         archive = context.config.archive
-        command = [
-            *context.processor_command("scripts/01_archive_scotus_audio.py"),
-            "--output",
-            str(context.resolve(context.config.paths.archive_dir)),
-            "--retries",
-            str(archive.retries),
-            "--timeout",
-            str(archive.timeout_seconds),
-            "--rate-limit",
-            str(archive.rate_limit_seconds),
-        ]
-        if context.config.case.docket:
-            command.extend(["--docket", context.config.case.docket])
-        for term in context.config.case.term:
-            command.extend(["--term", str(term)])
-        if archive.include_transcripts:
-            command.append("--include-transcripts")
-        if archive.overwrite:
-            command.append("--overwrite")
-        return command
+        result = archive_audio.archive_records(
+            ArchiveProcessorInput(
+                output=context.resolve(context.config.paths.archive_dir),
+                term=context.config.case.term or None,
+                from_term=None,
+                to_term=None,
+                docket=[context.config.case.docket] if context.config.case.docket else None,
+                query=None,
+                list_terms=False,
+                include_transcripts=archive.include_transcripts,
+                dry_run=False,
+                overwrite=archive.overwrite,
+                limit=None,
+                rate_limit=archive.rate_limit_seconds,
+                retry_delay=2.0,
+                retries=archive.retries,
+                timeout=archive.timeout_seconds,
+            ).to_namespace()
+        )
+        if result != 0:
+            raise RuntimeError(f"archive processor returned {result}")
+        return {"archive_dir": str(context.resolve(context.config.paths.archive_dir))}
 
 
 class ExtractTranscriptStep(PipelineStep):
@@ -47,15 +74,22 @@ class ExtractTranscriptStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.speaker_turns]
 
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         assert context.artifacts is not None
-        return [
-            *context.processor_command("scripts/02_extract_transcript_pdf.py"),
-            "--pdf",
-            str(context.artifacts.transcript_pdf),
-            "--output",
-            str(context.resolve(context.config.paths.transcript_output_dir)),
-        ]
+        output_dir = context.resolve(context.config.paths.transcript_output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        text = extract_transcript.extract_pdf_text(context.artifacts.transcript_pdf, layout=True)
+        turns = extract_transcript.parse_speaker_turns(text)
+
+        text_path = output_dir / f"{context.artifacts.transcript_pdf.stem}.txt"
+        turns_path = context.artifacts.speaker_turns
+        text_path.write_text(text, encoding="utf-8")
+        turns_path.parent.mkdir(parents=True, exist_ok=True)
+        turns_path.write_text(
+            json.dumps([asdict(turn) for turn in turns], indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return {"text": str(text_path), "speaker_turns": str(turns_path), "turn_count": len(turns)}
 
 
 class BuildTimelineStep(PipelineStep):
@@ -66,19 +100,21 @@ class BuildTimelineStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.timeline]
 
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         assert context.artifacts is not None
-        return [
-            *context.processor_command("scripts/05_build_case_timeline.py"),
-            "--case-dir",
-            str(context.artifacts.case_dir),
-            "--audio",
-            str(context.artifacts.audio),
-            "--speaker-turns",
-            str(context.artifacts.speaker_turns),
-            "--output",
-            str(context.artifacts.timeline),
-        ]
+        output = build_timeline.build_timeline(
+            BuildTimelineProcessorInput(
+                case_dir=context.artifacts.case_dir,
+                metadata=context.artifacts.metadata,
+                audio=context.artifacts.audio,
+                speaker_turns=context.artifacts.speaker_turns,
+                whisperx=None,
+                diarization=None,
+                alignment=None,
+                output=context.artifacts.timeline,
+            ).to_namespace()
+        )
+        return {"timeline": str(output)}
 
 
 class RunAlignmentStep(PipelineStep):
@@ -89,42 +125,46 @@ class RunAlignmentStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.chunk_report]
 
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         assert context.artifacts is not None
         alignment = context.config.alignment
-        command = [
-            *context.processor_command("scripts/07_run_alignment_chunks.py"),
-            "--case-dir",
-            str(context.artifacts.case_dir),
-            "--audio",
-            str(context.artifacts.audio),
-            "--timeline",
-            str(context.artifacts.timeline),
-            "--output-dir",
-            str(context.resolve(context.config.paths.alignment_output_dir)),
-            "--report",
-            str(context.artifacts.chunk_report),
-            "--chunk-seconds",
-            str(alignment.chunk_seconds),
-            "--workers",
-            str(alignment.workers),
-            "--model-size",
-            alignment.model_size,
-            "--max-bad-ratio",
-            str(alignment.max_bad_ratio),
-        ]
-        if alignment.max_chunks:
-            command.extend(["--max-chunks", str(alignment.max_chunks)])
-        if alignment.stop_on_warning:
-            command.append("--stop-on-warning")
-        if alignment.overwrite:
-            command.append("--overwrite")
-        return command
+        workers = 1
+        if alignment.workers != workers:
+            context.event_bus.emit(
+                EventType.step_output,
+                "native WhisperX alignment is serialized to avoid shared GPU/model state",
+                severity=Severity.warning,
+                step_id=self.step_id,
+                data={"requested_workers": alignment.workers, "effective_workers": workers},
+            )
+        report = alignment_chunks.build_report(
+            AlignmentChunksProcessorInput(
+                case_dir=context.artifacts.case_dir,
+                metadata=context.artifacts.metadata,
+                audio=context.artifacts.audio,
+                timeline=context.artifacts.timeline,
+                speaker_turns=context.artifacts.speaker_turns,
+                output_dir=context.resolve(context.config.paths.alignment_output_dir),
+                report=context.artifacts.chunk_report,
+                chunk_seconds=alignment.chunk_seconds,
+                max_chunks=alignment.max_chunks,
+                turn_padding=3,
+                model_size=alignment.model_size,
+                max_segments_per_turn=30,
+                min_score=0.45,
+                max_bad_ratio=alignment.max_bad_ratio,
+                stop_on_warning=alignment.stop_on_warning,
+                dry_run=False,
+                overwrite=alignment.overwrite,
+                workers=workers,
+            ).to_namespace()
+        )
+        return {"report": str(report), "requested_workers": alignment.workers, "effective_workers": workers}
 
     def validate_success(
         self,
         context: PipelineContext,
-        result: CommandResult,
+        metadata: dict[str, Any],
     ) -> tuple[bool, str | None, dict[str, object]]:
         assert context.artifacts is not None
         report_path = context.artifacts.chunk_report
@@ -138,20 +178,20 @@ class RunAlignmentStep(PipelineStep):
         error_count = int(quality_counts.get("error", 0) or 0)
         planned = int(summary.get("planned_chunks", 0) or 0)
         completed = int(summary.get("completed_chunks", 0) or 0)
-        metadata: dict[str, object] = {
+        validation_metadata: dict[str, object] = {
             "report": str(report_path),
             "planned_chunks": planned,
             "completed_chunks": completed,
             "quality_counts": quality_counts,
         }
         if planned <= 0:
-            return False, "alignment produced no planned chunks", metadata
+            return False, "alignment produced no planned chunks", validation_metadata
         if completed < planned:
-            return False, f"alignment completed only {completed}/{planned} chunks", metadata
+            return False, f"alignment completed only {completed}/{planned} chunks", validation_metadata
         if error_count:
-            metadata["first_error"] = first_chunk_error(report)
-            return False, f"alignment failed: {error_count} chunk(s) errored", metadata
-        return True, None, metadata
+            validation_metadata["first_error"] = first_chunk_error(report)
+            return False, f"alignment failed: {error_count} chunk(s) errored", validation_metadata
+        return True, None, validation_metadata
 
 
 class MergeAlignmentStep(PipelineStep):
@@ -162,22 +202,37 @@ class MergeAlignmentStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.merged_alignment, context.artifacts.timeline]
 
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         assert context.artifacts is not None
-        return [
-            *context.processor_command("scripts/08_merge_chunk_alignments.py"),
-            "--case-dir",
-            str(context.artifacts.case_dir),
-            "--audio",
-            str(context.artifacts.audio),
-            "--chunk-report",
-            str(context.artifacts.chunk_report),
-            "--output",
-            str(context.artifacts.merged_alignment),
-            "--rebuild-timeline",
-            "--timeline-output",
-            str(context.artifacts.timeline),
-        ]
+        merged = merge_alignments.build_merged_alignment(
+            MergeAlignmentProcessorInput(
+                case_dir=context.artifacts.case_dir,
+                metadata=context.artifacts.metadata,
+                audio=context.artifacts.audio,
+                speaker_turns=context.artifacts.speaker_turns,
+                output_dir=context.resolve(context.config.paths.alignment_output_dir),
+                output=context.artifacts.merged_alignment,
+                chunks_dir=context.resolve(context.config.paths.alignment_output_dir) / "chunks",
+                chunk_report=context.artifacts.chunk_report,
+                chunks=None,
+                all_chunks=False,
+                rebuild_timeline=False,
+                timeline_output=None,
+            ).to_namespace()
+        )
+        timeline = build_timeline.build_timeline(
+            BuildTimelineProcessorInput(
+                case_dir=context.artifacts.case_dir,
+                metadata=context.artifacts.metadata,
+                audio=context.artifacts.audio,
+                speaker_turns=context.artifacts.speaker_turns,
+                whisperx=None,
+                diarization=None,
+                alignment=merged,
+                output=context.artifacts.timeline,
+            ).to_namespace()
+        )
+        return {"merged_alignment": str(merged), "timeline": str(timeline)}
 
 
 class AlignOfficialWordsStep(PipelineStep):
@@ -188,29 +243,41 @@ class AlignOfficialWordsStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.official_word_alignment, context.artifacts.timeline]
 
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         assert context.artifacts is not None
         official = context.config.official_words
-        command = [
-            *context.processor_command("scripts/09_force_align_official_transcript_blocks.py"),
-            "--timeline",
-            str(context.artifacts.timeline),
-            "--audio",
-            str(context.artifacts.audio),
-            "--output-alignment",
-            str(context.artifacts.official_word_alignment),
-            "--output-timeline",
-            str(context.artifacts.timeline),
-            "--method",
-            official.method,
-            "--progress-every",
-            str(official.progress_every),
-        ]
-        if official.overwrite:
-            command.append("--overwrite")
-        if official.apply_low_quality:
-            command.append("--apply-low-quality")
-        return command
+        alignment, timeline = official_words.run(
+            OfficialWordsProcessorInput(
+                timeline=context.artifacts.timeline,
+                audio=context.artifacts.audio,
+                output_alignment=context.artifacts.official_word_alignment,
+                output_timeline=context.artifacts.timeline,
+                method=official.method,
+                cache_dir=context.resolve(context.config.paths.alignment_output_dir) / "cache",
+                min_asr_chunk_seconds=120.0,
+                language="en",
+                align_model=None,
+                device=None,
+                block_seconds=180.0,
+                overlap_seconds=45.0,
+                pad_seconds=12.0,
+                min_timed_word_ratio=0.45,
+                min_mean_word_score=0.35,
+                min_apply_mean_word_score=0.35,
+                min_word_seconds=0.08,
+                long_interpolation_min_words=12,
+                long_interpolation_words_per_second=3.0,
+                max_turn_overlap_seconds=1.0,
+                max_token_scan=12,
+                min_token_match_ratio=0.78,
+                interpolate_method="nearest",
+                progress_every=official.progress_every,
+                max_blocks=None,
+                apply_low_quality=official.apply_low_quality,
+                overwrite=official.overwrite,
+            ).to_namespace()
+        )
+        return {"official_word_alignment": str(alignment), "timeline": str(timeline)}
 
 
 class RefineSpeechGapsStep(PipelineStep):
@@ -221,17 +288,22 @@ class RefineSpeechGapsStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.timeline]
 
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         assert context.artifacts is not None
-        return [
-            *context.processor_command("scripts/10_refine_timeline_speech_gaps.py"),
-            "--timeline",
-            str(context.artifacts.timeline),
-            "--output",
-            str(context.artifacts.timeline),
-            "--cache-dir",
-            str(context.resolve(context.config.paths.alignment_output_dir) / "cache"),
-        ]
+        output = speech_gaps.refine_timeline(
+            SpeechGapsProcessorInput(
+                timeline=context.artifacts.timeline,
+                output=context.artifacts.timeline,
+                cache_dir=context.resolve(context.config.paths.alignment_output_dir) / "cache",
+                whisperx=None,
+                merge_gap_seconds=0.8,
+                min_non_speech_seconds=1.75,
+                snap_gap_seconds=1.0,
+                min_region_seconds=0.05,
+                min_segment_seconds=0.2,
+            ).to_namespace()
+        )
+        return {"timeline": str(output)}
 
 
 class BuildProfilesStep(PipelineStep):
@@ -242,15 +314,15 @@ class BuildProfilesStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.profiles]
 
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         assert context.artifacts is not None
-        return [
-            *context.processor_command("scripts/11_build_speaker_profiles.py"),
-            "--timeline",
-            str(context.artifacts.timeline),
-            "--output",
-            str(context.artifacts.profiles),
-        ]
+        output = speaker_profiles.build_profiles(
+            SpeakerProfilesProcessorInput(
+                timeline=context.artifacts.timeline,
+                output=context.artifacts.profiles,
+            ).to_namespace()
+        )
+        return {"profiles": str(output)}
 
 
 class BuildViewerStep(PipelineStep):
@@ -261,51 +333,53 @@ class BuildViewerStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.viewer]
 
-    def command(self, context: PipelineContext) -> list[str]:
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
         assert context.artifacts is not None
-        return [
-            *context.processor_command("scripts/12_build_case_viewer.py"),
-            "--timeline",
-            str(context.artifacts.timeline),
-            "--profiles",
-            str(context.artifacts.profiles),
-            "--output",
-            str(context.artifacts.viewer),
-        ]
+        output = case_viewer.build_viewer(
+            ViewerProcessorInput(
+                timeline=context.artifacts.timeline,
+                profiles=context.artifacts.profiles,
+                output=context.artifacts.viewer,
+            ).to_namespace()
+        )
+        return {"viewer": str(output)}
 
 
 class ApplyQaMarkersStep(PipelineStep):
     step_id = "apply_qa_markers"
     title = "Apply QA markers"
 
-    def outputs(self, context: PipelineContext) -> list[Path]:
+    def report_path(self, context: PipelineContext) -> Path:
         assert context.artifacts is not None
-        return [context.artifacts.timeline, *context.artifacts.qa_reports]
-
-    def command(self, context: PipelineContext) -> list[str]:
-        assert context.artifacts is not None
-        markers = context.config.qa.markers
-        marker = context.resolve(markers[0]) if markers else Path("__missing_marker_export__.json")
-        report = (
+        return (
             context.resolve(context.config.paths.log_dir)
             / f"{context.artifacts.timeline.stem}.qa-marker-apply-report.json"
         )
-        command = [
-            *context.processor_command("scripts/16_apply_qa_markers_to_timeline.py"),
-            "--timeline",
-            str(context.artifacts.timeline),
-            "--markers",
-            str(marker),
-            "--output",
-            str(context.artifacts.timeline),
-            "--report",
-            str(report),
-            "--min-order-gap",
-            str(context.config.qa.min_order_gap),
-        ]
-        if context.config.qa.enforce_order:
-            command.append("--enforce-order")
-        return command
+
+    def outputs(self, context: PipelineContext) -> list[Path]:
+        assert context.artifacts is not None
+        return [context.artifacts.timeline, self.report_path(context)]
+
+    def execute(self, context: PipelineContext) -> dict[str, Any]:
+        assert context.artifacts is not None
+        markers = context.config.qa.markers
+        if not markers:
+            raise RuntimeError("QA marker step enabled without qa.markers")
+        marker = context.resolve(markers[0])
+        report = self.report_path(context)
+        output = qa_markers.apply_markers(
+            QaMarkersProcessorInput(
+                timeline=context.artifacts.timeline,
+                markers=marker,
+                output=context.artifacts.timeline,
+                report=report,
+                default_words_per_second=2.8,
+                min_segment_duration=0.2,
+                enforce_order=context.config.qa.enforce_order,
+                min_order_gap=context.config.qa.min_order_gap,
+            ).to_namespace()
+        )
+        return {"timeline": str(output), "report": str(report), "markers": str(marker)}
 
 
 def first_chunk_error(report: dict[str, Any]) -> str | None:
@@ -315,5 +389,5 @@ def first_chunk_error(report: dict[str, Any]) -> str | None:
         stderr = chunk.get("stderr")
         if isinstance(stderr, list) and stderr:
             return "\n".join(str(line) for line in stderr[-8:])
-        return f"chunk {chunk.get('index')} returned {chunk.get('command_returncode')}"
+        return f"chunk {chunk.get('index')} returned {chunk.get('returncode')}"
     return None

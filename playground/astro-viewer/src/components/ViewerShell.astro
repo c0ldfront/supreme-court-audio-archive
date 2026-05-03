@@ -1,0 +1,28 @@
+---
+import CaseSidebar from "./CaseSidebar.astro";
+import MainPanel from "./MainPanel.astro";
+import QaDialog from "./QaDialog.astro";
+
+interface Props {
+  base: string;
+  dataRoot: string;
+}
+
+const { base, dataRoot } = Astro.props;
+---
+
+<div
+  id="viewer-root"
+  class="viewer-shell"
+  data-base={base}
+  data-timeline-url={`${dataRoot}/timeline.json`}
+  data-profiles-url={`${dataRoot}/profiles.json`}
+>
+  <div class="viewer-status" id="viewer-status" role="status" aria-live="polite">
+    <div class="loader" aria-hidden="true"></div>
+    <span id="viewer-status-text">Loading case data...</span>
+  </div>
+  <CaseSidebar base={base} />
+  <MainPanel />
+  <QaDialog />
+</div>

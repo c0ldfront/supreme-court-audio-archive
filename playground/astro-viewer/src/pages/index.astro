@@ -1,35 +1,30 @@
 ---
-import "../styles/global.css";
+import BaseLayout from "../layouts/BaseLayout.astro";
 
 const base = import.meta.env.BASE_URL;
 const caseHref = `${base}cases/2025/24-109/`;
 ---
 
-<!doctype html>
-<html lang="en" data-theme="dark">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Static Supreme Court oral argument viewer archive playground." />
-    <title>SCOTUS Audio Archive</title>
-  </head>
-  <body class="archive-body">
-    <main class="archive-shell">
-      <header class="archive-hero">
-        <p class="archive-label">Astro playground</p>
-        <h1>Supreme Court audio viewers</h1>
-        <p>
-          Static case viewers generated from processed timeline, speaker profile, and word alignment data.
-        </p>
-      </header>
+<BaseLayout
+  title="SCOTUS Audio Archive"
+  description="Static Supreme Court oral argument viewer archive playground."
+  bodyClass="archive-body"
+>
+  <main class="archive-shell">
+    <header class="archive-hero">
+      <p class="archive-label">Astro playground</p>
+      <h1>Supreme Court audio viewers</h1>
+      <p>
+        Static case viewers generated from processed timeline, speaker profile, and word alignment data.
+      </p>
+    </header>
 
-      <section class="case-list" aria-label="Available cases">
-        <a class="case-card" href={caseHref}>
-          <span class="case-term">2025 term</span>
-          <strong>Louisiana v. Callais</strong>
-          <span>24-109 · argued October 15, 2025 · 150 min</span>
-        </a>
-      </section>
-    </main>
-  </body>
-</html>
+    <section class="case-list" aria-label="Available cases">
+      <a class="case-card" href={caseHref}>
+        <span class="case-term">2025 term</span>
+        <strong>Louisiana v. Callais</strong>
+        <span>24-109 · argued October 15, 2025 · 150 min</span>
+      </a>
+    </section>
+  </main>
+</BaseLayout>
