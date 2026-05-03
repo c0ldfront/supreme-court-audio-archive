@@ -142,6 +142,73 @@ def build_non_speech_event(index: int, start: float, end: float) -> dict[str, An
     }
 
 
+def transcript_word_regions(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    regions: list[dict[str, Any]] = []
+    for segment in segments:
+        words = segment.get("words")
+        if not isinstance(words, list):
+            continue
+        for word in words:
+            if not isinstance(word, dict):
+                continue
+            try:
+                start = float(word["start"])
+                end = float(word["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if end <= start:
+                continue
+            regions.append(
+                {
+                    "start": round(start, 3),
+                    "end": round(end, 3),
+                    "duration": round(end - start, 3),
+                    "source": "official_transcript_word",
+                }
+            )
+    return merge_regions(sorted(regions, key=lambda region: (float(region["start"]), float(region["end"]))), 0.05)
+
+
+def clip_non_speech_events(
+    events: list[dict[str, Any]],
+    protected_regions: list[dict[str, Any]],
+    min_gap_seconds: float,
+) -> tuple[list[dict[str, Any]], int]:
+    clipped: list[dict[str, Any]] = []
+    suppressed = 0
+    protected = sorted(protected_regions, key=lambda region: (float(region["start"]), float(region["end"])))
+
+    for event in events:
+        try:
+            parts = [(float(event["start"]), float(event["end"]))]
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        for region in protected:
+            region_start = float(region["start"])
+            region_end = float(region["end"])
+            next_parts: list[tuple[float, float]] = []
+            for start, end in parts:
+                if region_end <= start or region_start >= end:
+                    next_parts.append((start, end))
+                    continue
+                if region_start > start:
+                    next_parts.append((start, min(region_start, end)))
+                if region_end < end:
+                    next_parts.append((max(region_end, start), end))
+            parts = next_parts
+            if not parts:
+                break
+
+        for start, end in parts:
+            if end - start < min_gap_seconds:
+                suppressed += 1
+                continue
+            clipped.append(build_non_speech_event(len(clipped), start, end))
+
+    return clipped, suppressed
+
+
 def overlaps(region: dict[str, Any], start: float, end: float) -> bool:
     return float(region["end"]) > start and float(region["start"]) < end
 
@@ -274,7 +341,9 @@ def refine_timeline(args: argparse.Namespace) -> Path:
         args.snap_gap_seconds,
         args.min_segment_seconds,
     )
-    events = non_speech_events(speech_regions, duration, args.min_non_speech_seconds)
+    raw_events = non_speech_events(speech_regions, duration, args.min_non_speech_seconds)
+    word_regions = transcript_word_regions(refined_segments)
+    events, suppressed_events = clip_non_speech_events(raw_events, word_regions, args.min_non_speech_seconds)
 
     timeline["segments"] = refined_segments
     timeline["events"] = [event for event in timeline.get("events", []) if event.get("type") != "non_speech"] + events
@@ -286,7 +355,10 @@ def refine_timeline(args: argparse.Namespace) -> Path:
         "whisperx_file_count": len(whisperx_paths),
         "raw_region_count": len(raw_regions),
         "merged_region_count": len(speech_regions),
+        "transcript_word_region_count": len(word_regions),
+        "raw_non_speech_event_count": len(raw_events),
         "non_speech_event_count": len(events),
+        "suppressed_clipped_event_piece_count": suppressed_events,
         "settings": {
             "merge_gap_seconds": args.merge_gap_seconds,
             "min_non_speech_seconds": args.min_non_speech_seconds,
