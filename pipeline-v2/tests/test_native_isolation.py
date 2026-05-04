@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from scotus_pipeline.processors._native import alignment_chunks
+from scotus_pipeline.processors.contracts import AlignmentChunksProcessorInput
 
 
 class NativeIsolationTests(unittest.TestCase):
@@ -24,15 +25,28 @@ class NativeIsolationTests(unittest.TestCase):
     def test_chunk_cache_requires_matching_speaker_turns_source(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            chunk_path = root / "chunks" / "case.chunk-000000-000010.json"
+            chunk_path = root / "chunks" / "000000-000010.json"
+            audio_path = root / "case.mp3"
             expected_turns = root / "transcripts" / "new.speaker-turns.json"
             stale_turns = root / "transcripts" / "old.speaker-turns.json"
             expected_turns.parent.mkdir(parents=True)
+            audio_path.write_bytes(b"fake-audio")
             expected_turns.write_text("[]\n", encoding="utf-8")
-            stale_turns.write_text("[]\n", encoding="utf-8")
+            stale_turns.write_text("[{\"text\":\"old\"}]\n", encoding="utf-8")
+            args = AlignmentChunksProcessorInput(
+                case_dir=root,
+                metadata=None,
+                audio=audio_path,
+                timeline=root / "timeline.json",
+                speaker_turns=expected_turns,
+                output_dir=root,
+                cache_dir=root / ".cache",
+                report=root / "report.json",
+                chunk_seconds=10.0,
+            )
 
             alignment_chunks.write_json(
-                root / "cache" / "case.000000-000010.whisperx.json",
+                root / ".cache" / "000000-000010.whisperx.json",
                 {"segments": [{"words": [{"word": "test", "start": 0.0, "end": 0.2}]}]},
             )
             alignment_chunks.write_json(
@@ -43,19 +57,20 @@ class NativeIsolationTests(unittest.TestCase):
                     "alignment": {"status_counts": {"matched": 1}},
                     "aligned_turns": [{"turn_index": 0, "status": "matched"}],
                     "sources": {"speaker_turns": str(stale_turns)},
+                    "cache_key": alignment_chunks.chunk_cache_key(args, audio_path, stale_turns),
                 },
             )
 
             self.assertFalse(
-                alignment_chunks.validate_existing_chunk(chunk_path, 0.0, 10.0, 0, 2, expected_turns)
+                alignment_chunks.validate_existing_chunk(chunk_path, args, audio_path, 0.0, 10.0, 0, 2, expected_turns)
             )
 
             payload = json.loads(chunk_path.read_text(encoding="utf-8"))
-            payload["sources"]["speaker_turns"] = str(expected_turns)
+            payload["cache_key"] = alignment_chunks.chunk_cache_key(args, audio_path, expected_turns)
             alignment_chunks.write_json(chunk_path, payload)
 
             self.assertTrue(
-                alignment_chunks.validate_existing_chunk(chunk_path, 0.0, 10.0, 0, 2, expected_turns)
+                alignment_chunks.validate_existing_chunk(chunk_path, args, audio_path, 0.0, 10.0, 0, 2, expected_turns)
             )
 
 

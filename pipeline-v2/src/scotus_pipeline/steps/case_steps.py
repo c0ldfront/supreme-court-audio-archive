@@ -1,34 +1,50 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from scotus_pipeline.artifacts import (
+    validate_chunk_report_file,
+    validate_merged_alignment_file,
+    validate_official_word_alignment_file,
+    validate_profiles_file,
+    validate_timeline_file,
+)
 from scotus_pipeline.context import PipelineContext
 from scotus_pipeline.events import EventType, Severity
-from scotus_pipeline.processors.contracts import (
-    AlignmentChunksProcessorInput,
-    ArchiveProcessorInput,
-    BuildTimelineProcessorInput,
-    MergeAlignmentProcessorInput,
-    OfficialWordsProcessorInput,
-    QaMarkersProcessorInput,
-    SpeakerProfilesProcessorInput,
-    SpeechGapsProcessorInput,
-    ViewerProcessorInput,
-)
 from scotus_pipeline.processors._native import (
     alignment_chunks,
     archive_audio,
     build_timeline,
-    case_viewer,
     extract_transcript,
     merge_alignments,
     official_words,
     qa_markers,
     speaker_profiles,
     speech_gaps,
+    viewer_bundle,
+)
+from scotus_pipeline.processors._native._io import atomic_write_json, atomic_write_text
+from scotus_pipeline.processors.contracts import (
+    AlignmentChunksProcessorInput,
+    AlignmentChunksProcessorResult,
+    ArchiveProcessorInput,
+    ArchiveProcessorResult,
+    BuildTimelineProcessorInput,
+    MergeAlignmentProcessorInput,
+    MergeAlignmentProcessorResult,
+    OfficialWordsProcessorInput,
+    OfficialWordsProcessorResult,
+    QaMarkersProcessorInput,
+    QaMarkersProcessorResult,
+    SpeakerProfilesProcessorInput,
+    SpeakerProfilesProcessorResult,
+    SpeechGapsProcessorInput,
+    TimelineProcessorResult,
+    TranscriptProcessorResult,
+    ViewerBundleProcessorResult,
+    ViewerProcessorInput,
 )
 from scotus_pipeline.steps.base import PipelineStep
 
@@ -38,13 +54,14 @@ class ArchiveStep(PipelineStep):
     title = "Archive case audio and transcript"
 
     def outputs(self, context: PipelineContext) -> list[Path]:
-        return [context.resolve(context.config.paths.archive_dir)]
+        return [context.resolve(context.config.paths.sources_dir)]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def execute(self, context: PipelineContext) -> ArchiveProcessorResult:
         archive = context.config.archive
         result = archive_audio.archive_records(
             ArchiveProcessorInput(
-                output=context.resolve(context.config.paths.archive_dir),
+                progress=self.progress_callback(context),
+                output=context.resolve(context.config.paths.courts_dir),
                 term=context.config.case.term or None,
                 from_term=None,
                 to_term=None,
@@ -59,11 +76,12 @@ class ArchiveStep(PipelineStep):
                 retry_delay=2.0,
                 retries=archive.retries,
                 timeout=archive.timeout_seconds,
-            ).to_namespace()
+            )
         )
         if result != 0:
             raise RuntimeError(f"archive processor returned {result}")
-        return {"archive_dir": str(context.resolve(context.config.paths.archive_dir))}
+        archive_dir = context.resolve(context.config.paths.sources_dir)
+        return ArchiveProcessorResult(archive_dir=archive_dir, outputs=[archive_dir])
 
 
 class ExtractTranscriptStep(PipelineStep):
@@ -74,22 +92,28 @@ class ExtractTranscriptStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.speaker_turns]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def inputs(self, context: PipelineContext) -> list[Path]:
         assert context.artifacts is not None
-        output_dir = context.resolve(context.config.paths.transcript_output_dir)
+        return [context.artifacts.transcript_pdf]
+
+    def execute(self, context: PipelineContext) -> TranscriptProcessorResult:
+        assert context.artifacts is not None
+        output_dir = context.artifacts.speaker_turns.parent
         output_dir.mkdir(parents=True, exist_ok=True)
         text = extract_transcript.extract_pdf_text(context.artifacts.transcript_pdf, layout=True)
         turns = extract_transcript.parse_speaker_turns(text)
 
-        text_path = output_dir / f"{context.artifacts.transcript_pdf.stem}.txt"
+        text_path = context.artifacts.transcript_text
         turns_path = context.artifacts.speaker_turns
-        text_path.write_text(text, encoding="utf-8")
-        turns_path.parent.mkdir(parents=True, exist_ok=True)
-        turns_path.write_text(
-            json.dumps([asdict(turn) for turn in turns], indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        atomic_write_text(text_path, text)
+        atomic_write_json(turns_path, [asdict(turn) for turn in turns])
+        return TranscriptProcessorResult(
+            text=text_path,
+            speaker_turns=turns_path,
+            turn_count=len(turns),
+            outputs=[text_path, turns_path],
+            metrics={"turn_count": len(turns)},
         )
-        return {"text": str(text_path), "speaker_turns": str(turns_path), "turn_count": len(turns)}
 
 
 class BuildTimelineStep(PipelineStep):
@@ -100,10 +124,15 @@ class BuildTimelineStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.timeline]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def inputs(self, context: PipelineContext) -> list[Path]:
+        assert context.artifacts is not None
+        return [context.artifacts.metadata, context.artifacts.audio, context.artifacts.speaker_turns]
+
+    def execute(self, context: PipelineContext) -> TimelineProcessorResult:
         assert context.artifacts is not None
         output = build_timeline.build_timeline(
             BuildTimelineProcessorInput(
+                progress=self.progress_callback(context),
                 case_dir=context.artifacts.case_dir,
                 metadata=context.artifacts.metadata,
                 audio=context.artifacts.audio,
@@ -112,9 +141,10 @@ class BuildTimelineStep(PipelineStep):
                 diarization=None,
                 alignment=None,
                 output=context.artifacts.timeline,
-            ).to_namespace()
+            )
         )
-        return {"timeline": str(output)}
+        validate_timeline_file(output, audio=context.artifacts.audio)
+        return TimelineProcessorResult(timeline=output, outputs=[output])
 
 
 class RunAlignmentStep(PipelineStep):
@@ -125,7 +155,11 @@ class RunAlignmentStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.chunk_report]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def inputs(self, context: PipelineContext) -> list[Path]:
+        assert context.artifacts is not None
+        return [context.artifacts.audio, context.artifacts.timeline, context.artifacts.speaker_turns]
+
+    def execute(self, context: PipelineContext) -> AlignmentChunksProcessorResult:
         assert context.artifacts is not None
         alignment = context.config.alignment
         workers = 1
@@ -139,12 +173,14 @@ class RunAlignmentStep(PipelineStep):
             )
         report = alignment_chunks.build_report(
             AlignmentChunksProcessorInput(
+                progress=self.progress_callback(context),
                 case_dir=context.artifacts.case_dir,
                 metadata=context.artifacts.metadata,
                 audio=context.artifacts.audio,
                 timeline=context.artifacts.timeline,
                 speaker_turns=context.artifacts.speaker_turns,
-                output_dir=context.resolve(context.config.paths.alignment_output_dir),
+                output_dir=context.artifacts.merged_alignment.parent,
+                cache_dir=context.artifacts.cache_dir / "asr",
                 report=context.artifacts.chunk_report,
                 chunk_seconds=alignment.chunk_seconds,
                 max_chunks=alignment.max_chunks,
@@ -157,9 +193,15 @@ class RunAlignmentStep(PipelineStep):
                 dry_run=False,
                 overwrite=alignment.overwrite,
                 workers=workers,
-            ).to_namespace()
+                use_asr_worker=True,
+            )
         )
-        return {"report": str(report), "requested_workers": alignment.workers, "effective_workers": workers}
+        validate_chunk_report_file(report, audio=context.artifacts.audio)
+        return AlignmentChunksProcessorResult(
+            report=report,
+            outputs=[report],
+            metrics={"requested_workers": alignment.workers, "effective_workers": workers},
+        )
 
     def validate_success(
         self,
@@ -202,26 +244,33 @@ class MergeAlignmentStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.merged_alignment, context.artifacts.timeline]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def inputs(self, context: PipelineContext) -> list[Path]:
+        assert context.artifacts is not None
+        return [context.artifacts.audio, context.artifacts.speaker_turns, context.artifacts.chunk_report]
+
+    def execute(self, context: PipelineContext) -> MergeAlignmentProcessorResult:
         assert context.artifacts is not None
         merged = merge_alignments.build_merged_alignment(
             MergeAlignmentProcessorInput(
+                progress=self.progress_callback(context),
                 case_dir=context.artifacts.case_dir,
                 metadata=context.artifacts.metadata,
                 audio=context.artifacts.audio,
                 speaker_turns=context.artifacts.speaker_turns,
-                output_dir=context.resolve(context.config.paths.alignment_output_dir),
+                output_dir=context.artifacts.merged_alignment.parent,
                 output=context.artifacts.merged_alignment,
-                chunks_dir=context.resolve(context.config.paths.alignment_output_dir) / "chunks",
+                chunks_dir=context.artifacts.chunk_report.parent,
                 chunk_report=context.artifacts.chunk_report,
                 chunks=None,
                 all_chunks=False,
                 rebuild_timeline=False,
                 timeline_output=None,
-            ).to_namespace()
+            )
         )
+        validate_merged_alignment_file(merged, audio=context.artifacts.audio)
         timeline = build_timeline.build_timeline(
             BuildTimelineProcessorInput(
+                progress=self.progress_callback(context),
                 case_dir=context.artifacts.case_dir,
                 metadata=context.artifacts.metadata,
                 audio=context.artifacts.audio,
@@ -230,9 +279,10 @@ class MergeAlignmentStep(PipelineStep):
                 diarization=None,
                 alignment=merged,
                 output=context.artifacts.timeline,
-            ).to_namespace()
+            )
         )
-        return {"merged_alignment": str(merged), "timeline": str(timeline)}
+        validate_timeline_file(timeline, audio=context.artifacts.audio)
+        return MergeAlignmentProcessorResult(merged_alignment=merged, timeline=timeline, outputs=[merged, timeline])
 
 
 class AlignOfficialWordsStep(PipelineStep):
@@ -243,17 +293,22 @@ class AlignOfficialWordsStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.official_word_alignment, context.artifacts.timeline]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def inputs(self, context: PipelineContext) -> list[Path]:
+        assert context.artifacts is not None
+        return [context.artifacts.audio, context.artifacts.timeline]
+
+    def execute(self, context: PipelineContext) -> OfficialWordsProcessorResult:
         assert context.artifacts is not None
         official = context.config.official_words
         alignment, timeline = official_words.run(
             OfficialWordsProcessorInput(
+                progress=self.progress_callback(context),
                 timeline=context.artifacts.timeline,
                 audio=context.artifacts.audio,
                 output_alignment=context.artifacts.official_word_alignment,
                 output_timeline=context.artifacts.timeline,
                 method=official.method,
-                cache_dir=context.resolve(context.config.paths.alignment_output_dir) / "cache",
+                cache_dir=context.artifacts.cache_dir / "asr",
                 min_asr_chunk_seconds=120.0,
                 language="en",
                 align_model=None,
@@ -275,9 +330,15 @@ class AlignOfficialWordsStep(PipelineStep):
                 max_blocks=None,
                 apply_low_quality=official.apply_low_quality,
                 overwrite=official.overwrite,
-            ).to_namespace()
+            )
         )
-        return {"official_word_alignment": str(alignment), "timeline": str(timeline)}
+        validate_official_word_alignment_file(alignment, audio=context.artifacts.audio)
+        validate_timeline_file(timeline, audio=context.artifacts.audio)
+        return OfficialWordsProcessorResult(
+            official_word_alignment=alignment,
+            timeline=timeline,
+            outputs=[alignment, timeline],
+        )
 
 
 class RefineSpeechGapsStep(PipelineStep):
@@ -288,22 +349,28 @@ class RefineSpeechGapsStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.timeline]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def inputs(self, context: PipelineContext) -> list[Path]:
+        assert context.artifacts is not None
+        return [context.artifacts.timeline, context.artifacts.official_word_alignment]
+
+    def execute(self, context: PipelineContext) -> TimelineProcessorResult:
         assert context.artifacts is not None
         output = speech_gaps.refine_timeline(
             SpeechGapsProcessorInput(
+                progress=self.progress_callback(context),
                 timeline=context.artifacts.timeline,
                 output=context.artifacts.timeline,
-                cache_dir=context.resolve(context.config.paths.alignment_output_dir) / "cache",
+                cache_dir=context.artifacts.cache_dir / "asr",
                 whisperx=None,
                 merge_gap_seconds=0.8,
                 min_non_speech_seconds=1.75,
                 snap_gap_seconds=1.0,
                 min_region_seconds=0.05,
                 min_segment_seconds=0.2,
-            ).to_namespace()
+            )
         )
-        return {"timeline": str(output)}
+        validate_timeline_file(output, audio=context.artifacts.audio)
+        return TimelineProcessorResult(timeline=output, outputs=[output])
 
 
 class BuildProfilesStep(PipelineStep):
@@ -314,35 +381,47 @@ class BuildProfilesStep(PipelineStep):
         assert context.artifacts is not None
         return [context.artifacts.profiles]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def inputs(self, context: PipelineContext) -> list[Path]:
+        assert context.artifacts is not None
+        return [context.artifacts.timeline]
+
+    def execute(self, context: PipelineContext) -> SpeakerProfilesProcessorResult:
         assert context.artifacts is not None
         output = speaker_profiles.build_profiles(
             SpeakerProfilesProcessorInput(
+                progress=self.progress_callback(context),
                 timeline=context.artifacts.timeline,
                 output=context.artifacts.profiles,
-            ).to_namespace()
+            )
         )
-        return {"profiles": str(output)}
+        validate_profiles_file(output, audio=context.artifacts.audio)
+        return SpeakerProfilesProcessorResult(profiles=output, outputs=[output])
 
 
 class BuildViewerStep(PipelineStep):
     step_id = "build_viewer"
-    title = "Build static viewer"
+    title = "Build viewer bundle"
 
     def outputs(self, context: PipelineContext) -> list[Path]:
         assert context.artifacts is not None
-        return [context.artifacts.viewer]
+        return [context.artifacts.viewer, context.artifacts.public_audio]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def inputs(self, context: PipelineContext) -> list[Path]:
         assert context.artifacts is not None
-        output = case_viewer.build_viewer(
+        return [context.artifacts.timeline, context.artifacts.profiles]
+
+    def execute(self, context: PipelineContext) -> ViewerBundleProcessorResult:
+        assert context.artifacts is not None
+        result = viewer_bundle.build_viewer_bundle(
             ViewerProcessorInput(
+                progress=self.progress_callback(context),
                 timeline=context.artifacts.timeline,
                 profiles=context.artifacts.profiles,
                 output=context.artifacts.viewer,
-            ).to_namespace()
+                public_audio=context.artifacts.public_audio,
+            )
         )
-        return {"viewer": str(output)}
+        return result
 
 
 class ApplyQaMarkersStep(PipelineStep):
@@ -351,16 +430,17 @@ class ApplyQaMarkersStep(PipelineStep):
 
     def report_path(self, context: PipelineContext) -> Path:
         assert context.artifacts is not None
-        return (
-            context.resolve(context.config.paths.log_dir)
-            / f"{context.artifacts.timeline.stem}.qa-marker-apply-report.json"
-        )
+        return context.artifacts.work_dir / "qa" / "qa-marker-apply-report.json"
 
     def outputs(self, context: PipelineContext) -> list[Path]:
         assert context.artifacts is not None
         return [context.artifacts.timeline, self.report_path(context)]
 
-    def execute(self, context: PipelineContext) -> dict[str, Any]:
+    def inputs(self, context: PipelineContext) -> list[Path]:
+        assert context.artifacts is not None
+        return [context.artifacts.timeline, *[context.resolve(path) for path in context.config.qa.markers]]
+
+    def execute(self, context: PipelineContext) -> QaMarkersProcessorResult:
         assert context.artifacts is not None
         markers = context.config.qa.markers
         if not markers:
@@ -369,6 +449,7 @@ class ApplyQaMarkersStep(PipelineStep):
         report = self.report_path(context)
         output = qa_markers.apply_markers(
             QaMarkersProcessorInput(
+                progress=self.progress_callback(context),
                 timeline=context.artifacts.timeline,
                 markers=marker,
                 output=context.artifacts.timeline,
@@ -377,9 +458,15 @@ class ApplyQaMarkersStep(PipelineStep):
                 min_segment_duration=0.2,
                 enforce_order=context.config.qa.enforce_order,
                 min_order_gap=context.config.qa.min_order_gap,
-            ).to_namespace()
+            )
         )
-        return {"timeline": str(output), "report": str(report), "markers": str(marker)}
+        validate_timeline_file(output, audio=context.artifacts.audio)
+        return QaMarkersProcessorResult(
+            timeline=output,
+            report=report,
+            outputs=[output, report],
+            metrics={"markers": str(marker)},
+        )
 
 
 def first_chunk_error(report: dict[str, Any]) -> str | None:

@@ -3,18 +3,17 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.processors.contracts import SpeakerProfilesProcessorInput
 
-DEFAULT_TIMELINE_OUTPUT = Path("timeline-output")
-DEFAULT_OUTPUT = Path("profiles-output")
 SCOTUS_BIOGRAPHIES_URL = "https://www.supremecourt.gov/about/biographies.aspx"
 JUSTICE_PHOTO_BASE = "https://www.supremecourt.gov/about/justice_pictures/"
 
@@ -82,10 +81,7 @@ def load_json(path: Path) -> Any:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, payload)
 
 
 def resolve_timeline(explicit: Path | None) -> Path:
@@ -199,7 +195,7 @@ def build_profile(speaker: str, timeline_speakers: list[dict[str, Any]], stats: 
     }
 
 
-def build_profiles(args: argparse.Namespace) -> Path:
+def build_profiles(args: SpeakerProfilesProcessorInput) -> Path:
     timeline_path = resolve_timeline(args.timeline)
     timeline = load_json(timeline_path)
     segments = timeline.get("segments", []) if isinstance(timeline, dict) else []
@@ -214,10 +210,9 @@ def build_profiles(args: argparse.Namespace) -> Path:
     profiles = [build_profile(speaker, speakers, stats.get(speaker, {}), index) for index, speaker in enumerate(ids)]
 
     case = timeline.get("case", {}) if isinstance(timeline, dict) else {}
-    stem = Path(str(case.get("audio_file") or timeline_path.stem)).stem
-    output = args.output or DEFAULT_OUTPUT / f"{stem}.speaker-profiles.json"
+    output = args.output
     payload = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "case": case,
         "sources": {
             "timeline": str(timeline_path),
@@ -232,25 +227,3 @@ def build_profiles(args: argparse.Namespace) -> Path:
     }
     write_json(output, payload)
     return output
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build speaker profile metadata for the case viewer.")
-    parser.add_argument("--timeline", type=Path, help="case timeline JSON from script 05 or 08")
-    parser.add_argument("--output", type=Path, help="speaker profiles JSON output path")
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    output = build_profiles(args)
-    data = load_json(output)
-    print(f"speaker_profiles: {output}")
-    print(f"case: {data['case'].get('docket')} {data['case'].get('name')}")
-    print(f"profiles: {len(data['profiles'])}")
-    print(f"with_photos: {sum(1 for profile in data['profiles'] if profile.get('photo_url'))}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

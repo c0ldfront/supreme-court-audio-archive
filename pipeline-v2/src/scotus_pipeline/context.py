@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -50,32 +51,42 @@ def build_artifacts(
     audio: Path,
     transcript_pdf: Path,
 ) -> CaseArtifacts:
-    stem = audio.stem
-    paths = context.config.paths
+    metadata_payload = context.read_json(metadata)
+    case_number = case_output_key(metadata_payload, context.config.case.docket, case_dir)
+    output_dir = context.resolve(context.config.paths.output_dir) / case_number
+    source_dir = context.resolve(context.config.paths.sources_dir) / case_number
+    work_dir = context.resolve(context.config.paths.work_dir) / case_number
+    cache_dir = context.resolve(context.config.paths.cache_dir) / case_number
+    run_dir = context.resolve(context.config.paths.runs_dir) / case_number
     return CaseArtifacts(
+        output_dir=output_dir,
+        source_dir=source_dir,
+        work_dir=work_dir,
+        cache_dir=cache_dir,
+        run_dir=run_dir,
+        snapshot_dir=work_dir / "timeline" / "snapshots",
         case_dir=case_dir,
         metadata=metadata,
         audio=audio,
         transcript_pdf=transcript_pdf,
-        speaker_turns=(
-            context.resolve(paths.transcript_output_dir) / f"{transcript_pdf.stem}.speaker-turns.json"
-        ),
-        timeline=context.resolve(paths.timeline_output_dir) / f"{stem}.case-timeline.json",
-        chunk_report=context.resolve(paths.alignment_output_dir) / "chunks" / f"{stem}.chunk-report.json",
-        merged_alignment=context.resolve(paths.alignment_output_dir) / f"{stem}.merged-chunks.json",
-        official_word_alignment=context.resolve(paths.alignment_output_dir)
-        / f"{stem}.official-asr-word-alignment.json",
-        profiles=context.resolve(paths.profiles_output_dir) / f"{stem}.speaker-profiles.json",
-        viewer=context.resolve(paths.viewer_output_dir) / f"{stem}.html",
+        transcript_text=work_dir / "transcript" / "transcript.txt",
+        speaker_turns=work_dir / "transcript" / "speaker-turns.json",
+        timeline=work_dir / "timeline" / "timeline.json",
+        chunk_report=work_dir / "alignment" / "chunk-report.json",
+        merged_alignment=work_dir / "alignment" / "merged.json",
+        official_word_alignment=work_dir / "alignment" / "official-words.json",
+        profiles=work_dir / "profiles" / "profiles.json",
+        viewer=output_dir / "bundle.json",
+        public_audio=output_dir / f"audio{audio.suffix.lower() or '.mp3'}",
     )
 
 
 def find_case_by_docket(context: PipelineContext) -> CaseArtifacts:
     docket = normalize_docket(context.config.case.docket or "")
     terms = set(context.config.case.term)
-    archive_dir = context.resolve(context.config.paths.archive_dir)
+    sources_dir = context.resolve(context.config.paths.sources_dir)
     candidates: list[tuple[str, int, Path]] = []
-    for metadata_path in sorted(archive_dir.glob("*/**/metadata.json")):
+    for metadata_path in sorted(sources_dir.glob("*/metadata.json")):
         try:
             metadata = context.read_json(metadata_path)
         except (OSError, json.JSONDecodeError):
@@ -105,6 +116,12 @@ def find_case_by_docket(context: PipelineContext) -> CaseArtifacts:
 
 def normalize_docket(value: str) -> str:
     return value.strip().casefold().replace(" ", "")
+
+
+def case_output_key(metadata: dict[str, Any], configured_docket: str | None, case_dir: Path) -> str:
+    raw = str(metadata.get("docket") or configured_docket or case_dir.name)
+    key = re.sub(r"[^A-Za-z0-9._-]+", "-", raw.strip())
+    return key.strip("-") or "case"
 
 
 def _resolve_audio(metadata: dict[str, Any], case_dir: Path) -> Path:

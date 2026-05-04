@@ -3,17 +3,16 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.processors.contracts import SpeechGapsProcessorInput
 
-DEFAULT_ALIGNMENT_OUTPUT = Path("alignment-output")
-DEFAULT_TIMELINE_OUTPUT = Path("timeline-output")
-WHISPERX_LABEL_RE = re.compile(r"\.(?P<start>\d{6})-(?P<end>\d{6})\.whisperx\.json$")
+WHISPERX_LABEL_RE = re.compile(r"(?P<start>\d{6})-(?P<end>\d{6})\.whisperx\.json$")
 
 
 def load_json(path: Path) -> Any:
@@ -21,10 +20,7 @@ def load_json(path: Path) -> Any:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, payload)
 
 
 def resolve_timeline(explicit: Path | None) -> Path:
@@ -46,10 +42,7 @@ def resolve_whisperx_paths(timeline: dict[str, Any], cache_dir: Path, explicit: 
     if explicit:
         return [path for path in explicit if path.exists()]
 
-    case = timeline.get("case", {}) if isinstance(timeline, dict) else {}
-    audio_file = case.get("audio_file") if isinstance(case, dict) else None
-    stem = Path(str(audio_file)).stem if audio_file else "*"
-    return sorted(cache_dir.glob(f"{stem}.*.whisperx.json"))
+    return sorted(cache_dir.glob("*.whisperx.json"))
 
 
 def collect_speech_regions(paths: list[Path], min_region_seconds: float) -> list[dict[str, Any]]:
@@ -315,7 +308,7 @@ def word_time_bounds(segment: dict[str, Any]) -> tuple[float | None, float | Non
     return min(starts), max(ends)
 
 
-def refine_timeline(args: argparse.Namespace) -> Path:
+def refine_timeline(args: SpeechGapsProcessorInput) -> Path:
     timeline_path = resolve_timeline(args.timeline)
     timeline = load_json(timeline_path)
     if not isinstance(timeline, dict):
@@ -344,7 +337,7 @@ def refine_timeline(args: argparse.Namespace) -> Path:
 
     timeline["segments"] = refined_segments
     timeline["events"] = [event for event in timeline.get("events", []) if event.get("type") != "non_speech"] + events
-    timeline["created_at"] = datetime.now(timezone.utc).isoformat()
+    timeline["created_at"] = datetime.now(UTC).isoformat()
     timeline.setdefault("sources", {})["speech_regions"] = {
         "available": True,
         "method": "whisperx_segment_gap_detection",
@@ -373,33 +366,3 @@ def refine_timeline(args: argparse.Namespace) -> Path:
     output = args.output or timeline_path
     write_json(output, timeline)
     return output
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Refine a timeline with speech/non-speech regions.")
-    parser.add_argument("--timeline", type=Path, help="case timeline JSON to refine")
-    parser.add_argument("--output", type=Path, help="refined timeline output path; defaults to overwriting --timeline")
-    parser.add_argument("--cache-dir", type=Path, default=DEFAULT_ALIGNMENT_OUTPUT / "cache")
-    parser.add_argument("--whisperx", type=Path, action="append", help="explicit WhisperX JSON file; repeat as needed")
-    parser.add_argument("--merge-gap-seconds", type=float, default=0.8)
-    parser.add_argument("--min-non-speech-seconds", type=float, default=1.75)
-    parser.add_argument("--snap-gap-seconds", type=float, default=1.0)
-    parser.add_argument("--min-region-seconds", type=float, default=0.05)
-    parser.add_argument("--min-segment-seconds", type=float, default=0.2)
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    output = refine_timeline(args)
-    timeline = load_json(output)
-    speech = timeline.get("sources", {}).get("speech_regions", {})
-    print(f"refined_timeline: {output}")
-    print(f"speech_regions: {speech.get('merged_region_count')}")
-    print(f"non_speech_events: {speech.get('non_speech_event_count')}")
-    print(f"qa_flags: {len(speech.get('qa_flags', []))}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -17,18 +17,18 @@ import shutil
 import sys
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
+from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.processors.contracts import ArchiveProcessorInput
 
 BASE_URL = "https://www.supremecourt.gov"
 ARGUMENT_AUDIO_URL = f"{BASE_URL}/oral_arguments/argument_audio"
-DEFAULT_OUTPUT = Path("archive/scotus-audio")
 USER_AGENT = "supreme-court-ingest/1.0 (+https://www.supremecourt.gov/)"
 
 
@@ -316,7 +316,7 @@ def fetch_detail(record: IndexRecord, timeout: int, retries: int, delay: float) 
 
 
 def record_directory(output: Path, record: DetailRecord) -> Path:
-    return output / str(record.term) / safe_slug(record.detail_id, max_length=64)
+    return output / "sources" / safe_slug(record.docket, max_length=64)
 
 
 def record_stem(record: DetailRecord) -> str:
@@ -374,10 +374,7 @@ def checksum_file(path: Path) -> tuple[str, int]:
 
 
 def write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, payload)
 
 
 def select_terms(args: argparse.Namespace) -> list[int]:
@@ -426,7 +423,7 @@ def normalize_lookup(value: str) -> str:
     return re.sub(r"\s+", " ", value.casefold()).strip()
 
 
-def archive_records(args: argparse.Namespace) -> int:
+def archive_records(args: ArchiveProcessorInput) -> int:
     output = args.output.resolve()
     terms = select_terms(args)
     if not terms:
@@ -480,15 +477,14 @@ def archive_records(args: argparse.Namespace) -> int:
 
             print(f"  {detail.date_argued or 'unknown date'} {detail.docket} {detail.case_name}")
             record_dir = record_directory(output, detail)
-            stem = record_stem(detail)
             record_payload: dict[str, object] = {
                 **asdict(detail),
-                "archived_at": datetime.now(timezone.utc).isoformat(),
+                "archived_at": datetime.now(UTC).isoformat(),
                 "source": "supremecourt.gov",
             }
 
             if detail.audio_url:
-                audio_path = record_dir / f"{stem}.mp3"
+                audio_path = record_dir / "audio.mp3"
                 if args.dry_run:
                     record_payload["audio_file"] = {"path": str(audio_path), "downloaded": False}
                 else:
@@ -505,7 +501,7 @@ def archive_records(args: argparse.Namespace) -> int:
                 failures.append({"term": str(term), "url": detail.detail_url, "error": "missing MP3 URL"})
 
             if args.include_transcripts and detail.transcript_url:
-                transcript_path = record_dir / f"{stem}.pdf"
+                transcript_path = record_dir / "transcript.pdf"
                 if args.dry_run:
                     record_payload["transcript_file"] = {
                         "path": str(transcript_path),
@@ -529,7 +525,7 @@ def archive_records(args: argparse.Namespace) -> int:
             break
 
     summary = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source_index": ARGUMENT_AUDIO_URL,
         "terms": terms,
         "record_count": len(manifest_records),
@@ -542,8 +538,10 @@ def archive_records(args: argparse.Namespace) -> int:
         print("\nDry run complete; no files were written.")
     else:
         output.mkdir(parents=True, exist_ok=True)
-        manifest_json = output / "manifest.latest.json"
-        manifest_jsonl = output / "manifest.jsonl"
+        index_dir = output / "sources" / "_index"
+        index_dir.mkdir(parents=True, exist_ok=True)
+        manifest_json = index_dir / "manifest.latest.json"
+        manifest_jsonl = index_dir / "manifest.jsonl"
         write_json(manifest_json, summary)
         with manifest_jsonl.open("w", encoding="utf-8") as handle:
             for record in manifest_records:
@@ -570,55 +568,3 @@ def positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("value must be at least 1")
     return parsed
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Archive Supreme Court oral argument MP3 audio from supremecourt.gov."
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        default=DEFAULT_OUTPUT,
-        help=f"archive output directory (default: {DEFAULT_OUTPUT})",
-    )
-    parser.add_argument(
-        "--term",
-        type=int,
-        action="append",
-        help="term year to archive; repeat for multiple terms. Defaults to all advertised terms.",
-    )
-    parser.add_argument("--from-term", type=int, help="oldest term year to include")
-    parser.add_argument("--to-term", type=int, help="newest term year to include")
-    parser.add_argument("--docket", action="append", help="only archive a matching docket; repeat as needed")
-    parser.add_argument(
-        "--query",
-        action="append",
-        help="only archive records whose docket, case name, detail id, date, or session contains this text",
-    )
-    parser.add_argument("--list-terms", action="store_true", help="print selected term years and exit")
-    parser.add_argument("--include-transcripts", action="store_true", help="also download transcript PDFs")
-    parser.add_argument("--dry-run", action="store_true", help="discover records without writing files")
-    parser.add_argument("--overwrite", action="store_true", help="redownload files even when present")
-    parser.add_argument("--limit", type=positive_int, help="maximum number of records to process")
-    parser.add_argument(
-        "--rate-limit",
-        type=positive_float,
-        default=0.5,
-        help="seconds to wait between case detail requests (default: 0.5)",
-    )
-    parser.add_argument("--retry-delay", type=positive_float, default=2.0, help="base retry delay in seconds")
-    parser.add_argument("--retries", type=positive_int, default=3, help="number of attempts per request")
-    parser.add_argument("--timeout", type=positive_int, default=60, help="HTTP timeout in seconds")
-    return parser
-
-
-def main(argv: Iterable[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    return archive_records(args)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

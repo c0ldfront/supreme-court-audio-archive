@@ -3,21 +3,19 @@
 
 from __future__ import annotations
 
-import argparse
 import difflib
 import json
 import re
 import shutil
 import subprocess
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-
-DEFAULT_ARCHIVE = Path("archive/scotus-audio")
-DEFAULT_TRANSCRIPT_OUTPUT = Path("transcript-output")
-DEFAULT_OUTPUT = Path("alignment-output")
+from scotus_pipeline.asr.dependencies import require_asr_dependencies
+from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.processors.contracts import AlignTranscriptProcessorInput
 
 
 def load_json(path: Path) -> Any:
@@ -25,10 +23,7 @@ def load_json(path: Path) -> Any:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, payload)
 
 
 def safe_float(value: Any, default: float | None = None) -> float | None:
@@ -93,7 +88,7 @@ def clip_audio(audio_path: Path, output_dir: Path, start: float, duration: float
 
     output_dir.mkdir(parents=True, exist_ok=True)
     end_label = "full" if duration is None else f"{int(start + duration):06d}"
-    clip_path = output_dir / f"{audio_path.stem}_{int(start):06d}_{end_label}.wav"
+    clip_path = output_dir / f"{int(start):06d}-{end_label}.wav"
     if clip_path.exists() and not overwrite:
         return clip_path
 
@@ -138,6 +133,7 @@ def run_whisperx(
     if output_path.exists() and not overwrite and (not align_words or whisperx_has_word_timings(output_path)):
         return output_path
 
+    require_asr_dependencies()
     import torch
     import whisperx
 
@@ -574,9 +570,7 @@ def is_better_candidate(score: dict[str, float], best_score: dict[str, float]) -
     if score["score"] > best_score["score"] + 0.03:
         return True
     near_tie = score["score"] >= best_score["score"] - 0.03
-    if near_tie and score["coverage"] > best_score["coverage"] + 0.03:
-        return True
-    return False
+    return near_tie and score["coverage"] > best_score["coverage"] + 0.03
 
 
 def select_turns(turns: list[dict[str, Any]], turn_start: int, turn_count: int | None) -> list[dict[str, Any]]:
@@ -586,7 +580,7 @@ def select_turns(turns: list[dict[str, Any]], turn_start: int, turn_count: int |
     return selected
 
 
-def build_alignment(args: argparse.Namespace) -> Path:
+def build_alignment(args: AlignTranscriptProcessorInput) -> Path:
     case_dir = find_case_dir(args.case_dir)
     metadata_path = args.metadata or case_dir / "metadata.json"
     metadata = load_json(metadata_path)
@@ -612,11 +606,11 @@ def build_alignment(args: argparse.Namespace) -> Path:
         raise ValueError("--start must fall within the audio duration")
 
     output_dir = args.output_dir.resolve()
-    cache_dir = output_dir / "cache"
+    cache_dir = args.cache_dir.resolve()
     clip_path = clip_audio(audio_path, cache_dir, start, duration, args.overwrite)
     end = total_duration if duration is None else min(total_duration, start + duration)
     label = f"{int(start):06d}-{int(end):06d}"
-    whisperx_path = args.whisperx or cache_dir / f"{audio_path.stem}.{label}.whisperx.json"
+    whisperx_path = args.whisperx or cache_dir / f"{label}.whisperx.json"
     run_whisperx(clip_path, whisperx_path, args.model_size, args.overwrite, align_words=not args.no_word_alignment)
     whisperx = load_json(whisperx_path)
     whisperx_segments = whisperx.get("segments", []) if isinstance(whisperx, dict) else []
@@ -631,9 +625,9 @@ def build_alignment(args: argparse.Namespace) -> Path:
     )
     status_counts = Counter(turn["status"] for turn in aligned)
 
-    output_path = args.output or output_dir / f"{audio_path.stem}.align-{label}.json"
+    output_path = args.output or output_dir / f"{label}.json"
     payload = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "case": {
             "docket": metadata.get("docket"),
             "name": metadata.get("case_name"),
@@ -671,42 +665,3 @@ def build_alignment(args: argparse.Namespace) -> Path:
     }
     write_json(output_path, payload)
     return output_path
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Align official transcript turns to a clipped audio range.")
-    parser.add_argument("--case-dir", type=Path, help="archived case directory containing metadata.json")
-    parser.add_argument("--metadata", type=Path, help="metadata.json path")
-    parser.add_argument("--audio", type=Path, help="MP3 path")
-    parser.add_argument("--speaker-turns", type=Path, help="speaker-turns JSON from script 02")
-    parser.add_argument("--whisperx", type=Path, help="reuse an existing WhisperX JSON instead of generating one")
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT, help="alignment output directory")
-    parser.add_argument("--output", type=Path, help="alignment JSON output path")
-    parser.add_argument("--start", type=float, default=0.0, help="audio start offset in seconds")
-    parser.add_argument("--duration", type=float, default=300.0, help="audio duration to process in seconds")
-    parser.add_argument("--full", action="store_true", help="process the full audio and all selected turns")
-    parser.add_argument("--turn-start", type=int, default=0, help="first transcript turn index to align")
-    parser.add_argument("--turn-count", type=int, default=40, help="number of transcript turns to align")
-    parser.add_argument("--model-size", default="tiny.en", help="WhisperX model size")
-    parser.add_argument("--max-segments-per-turn", type=int, default=30)
-    parser.add_argument("--min-score", type=float, default=0.45)
-    parser.add_argument("--overwrite", action="store_true", help="overwrite cached clip/WhisperX output")
-    parser.add_argument("--no-word-alignment", action="store_true", help="skip WhisperX word alignment in the cache")
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    output = build_alignment(args)
-    data = load_json(output)
-    print(f"alignment: {output}")
-    print(f"case: {data['case']['docket']} {data['case']['name']}")
-    print(f"window: {data['window']['start']}s - {data['window']['end']}s")
-    print(f"turns: {data['turn_window']['turn_count']}")
-    print(f"whisperx_segments: {data['whisperx']['segment_count']}")
-    print(f"statuses: {data['alignment']['status_counts']}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

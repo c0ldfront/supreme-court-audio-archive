@@ -20,10 +20,17 @@ class CaseIdentity(DomainModel):
 
 
 class CaseArtifacts(DomainModel):
+    output_dir: Path
+    source_dir: Path
+    work_dir: Path
+    cache_dir: Path
+    run_dir: Path
+    snapshot_dir: Path
     case_dir: Path
     metadata: Path
     audio: Path
     transcript_pdf: Path
+    transcript_text: Path
     speaker_turns: Path
     timeline: Path
     chunk_report: Path
@@ -31,6 +38,7 @@ class CaseArtifacts(DomainModel):
     official_word_alignment: Path
     profiles: Path
     viewer: Path
+    public_audio: Path
     qa_reports: list[Path] = Field(default_factory=list)
 
 
@@ -50,4 +58,7 @@ class StepResult(DomainModel):
     duration_seconds: float
     command: list[str] = Field(default_factory=list)
     outputs: list[Path] = Field(default_factory=list)
+    input_hashes: dict[str, str] = Field(default_factory=dict)
+    output_hashes: dict[str, str] = Field(default_factory=dict)
+    snapshots: dict[str, Path] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)

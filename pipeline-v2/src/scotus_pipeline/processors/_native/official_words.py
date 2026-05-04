@@ -4,22 +4,24 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from scotus_pipeline.asr.dependencies import require_asr_dependencies
+from scotus_pipeline.processors._native._io import atomic_write_json, path_identity, sha256_file
+from scotus_pipeline.processors.contracts import OfficialWordsProcessorInput
 
-DEFAULT_ALIGNMENT_OUTPUT = Path("alignment-output")
-DEFAULT_TIMELINE_OUTPUT = Path("timeline-output")
 TOKEN_RE = re.compile(r"\S+")
 NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
-WHISPERX_LABEL_RE = re.compile(r"\.(?P<start>\d{6})-(?P<end>\d{6})\.whisperx\.json$")
+WHISPERX_LABEL_RE = re.compile(r"(?P<start>\d{6})-(?P<end>\d{6})\.whisperx\.json$")
 
 
 @dataclass(frozen=True)
@@ -43,15 +45,20 @@ class AlignmentBlock:
     tokens: list[OfficialToken]
 
 
+def emit_progress(args: argparse.Namespace, current: int, total: int, message: str, **metrics: Any) -> None:
+    progress = getattr(args, "progress", None)
+    if progress:
+        progress(current=current, total=total, message=message, metrics=metrics)
+        return
+    print(message, flush=True)
+
+
 def load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, payload)
 
 
 def resolve_timeline(explicit: Path | None) -> Path:
@@ -75,10 +82,6 @@ def resolve_audio(timeline: dict[str, Any], explicit: Path | None) -> Path:
     if not path.exists():
         raise FileNotFoundError(path)
     return path
-
-
-def default_alignment_output(audio_path: Path) -> Path:
-    return DEFAULT_ALIGNMENT_OUTPUT / f"{audio_path.stem}.official-asr-word-alignment.json"
 
 
 def normalize_token(value: str) -> str:
@@ -305,6 +308,7 @@ def build_word_candidates(
     audio_path: Path,
     args: argparse.Namespace,
 ) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    require_asr_dependencies()
     import torch
     import whisperx
 
@@ -315,8 +319,8 @@ def build_word_candidates(
         blocks = blocks[: args.max_blocks]
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"block_alignment_device: {device}", flush=True)
-    print(f"block_alignment_blocks: {len(blocks)}", flush=True)
+    emit_progress(args, 0, max(1, len(blocks)), f"block_alignment_device: {device}", device=device)
+    emit_progress(args, 0, max(1, len(blocks)), f"block_alignment_blocks: {len(blocks)}")
     model, metadata = whisperx.load_align_model(
         language_code=args.language,
         device=device,
@@ -367,7 +371,7 @@ def build_word_candidates(
 
         block_reports.append(report)
         if index == len(blocks) or index % args.progress_every == 0:
-            print(f"block_alignment: {index}/{len(blocks)}", flush=True)
+            emit_progress(args, index, len(blocks), f"block_alignment: {index}/{len(blocks)}")
 
     return all_candidates, block_reports, {"device": device, "block_count": len(blocks)}
 
@@ -396,10 +400,7 @@ def build_turn_tokens(segments: list[dict[str, Any]]) -> dict[int, list[Official
 
 
 def resolve_whisperx_paths(timeline: dict[str, Any], cache_dir: Path) -> list[Path]:
-    case = timeline.get("case", {}) if isinstance(timeline, dict) else {}
-    audio_file = case.get("audio_file") if isinstance(case, dict) else None
-    stem = Path(str(audio_file)).stem if audio_file else "*"
-    return sorted(cache_dir.glob(f"{stem}.*.whisperx.json"))
+    return sorted(cache_dir.glob("*.whisperx.json"))
 
 
 def whisperx_path_offset(path: Path) -> tuple[float, float] | None:
@@ -529,8 +530,8 @@ def build_asr_word_candidates(
     if not asr_tokens:
         raise RuntimeError("no cached WhisperX ASR tokens found; run chunk alignment first")
 
-    print(f"asr_alignment_official_tokens: {len(official_tokens)}", flush=True)
-    print(f"asr_alignment_asr_tokens: {len(asr_tokens)}", flush=True)
+    emit_progress(args, 0, 1, f"asr_alignment_official_tokens: {len(official_tokens)}")
+    emit_progress(args, 0, 1, f"asr_alignment_asr_tokens: {len(asr_tokens)}")
     matcher = SequenceMatcher(
         None,
         [token.normalized for token in official_tokens],
@@ -540,7 +541,7 @@ def build_asr_word_candidates(
 
     candidates: dict[int, dict[str, Any]] = {}
     exact_blocks = 0
-    for tag, official_start, official_end, asr_start, asr_end in matcher.get_opcodes():
+    for tag, official_start, official_end, asr_start, _asr_end in matcher.get_opcodes():
         if tag != "equal":
             continue
         exact_blocks += 1
@@ -764,7 +765,7 @@ def build_block_word_alignment(timeline: dict[str, Any], audio_path: Path, args:
     mapped_ratios = [float(block.get("mapped_token_ratio", 0.0)) for block in mapped_blocks]
 
     return {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "case": timeline.get("case", {}),
         "sources": {
             "timeline": str(args.timeline),
@@ -816,7 +817,7 @@ def build_asr_word_alignment(timeline: dict[str, Any], audio_path: Path, args: a
         status_counts[status] = status_counts.get(status, 0) + 1
 
     return {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "case": timeline.get("case", {}),
         "sources": {
             "timeline": str(args.timeline),
@@ -843,6 +844,47 @@ def build_word_alignment(timeline: dict[str, Any], audio_path: Path, args: argpa
     if args.method == "block":
         return build_block_word_alignment(timeline, audio_path, args)
     return build_asr_word_alignment(timeline, audio_path, args)
+
+
+def official_alignment_fingerprint(
+    timeline: dict[str, Any],
+    audio_path: Path,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    segments = [
+        {
+            "turn_index": segment.get("turn_index"),
+            "speaker": segment.get("speaker"),
+            "text": segment.get("text"),
+        }
+        for segment in iter_timeline_segments(timeline)
+    ]
+    transcript_digest = hashlib.sha256(
+        json.dumps(segments, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "docket": str((timeline.get("case") or {}).get("docket") or ""),
+        "audio_file": path_identity(audio_path),
+        "audio_sha256": sha256_file(audio_path),
+        "method": args.method,
+        "transcript_sha256": transcript_digest,
+        "turn_count": len(segments),
+    }
+
+
+def alignment_matches_current_inputs(
+    alignment: Any,
+    timeline: dict[str, Any],
+    audio_path: Path,
+    args: argparse.Namespace,
+) -> bool:
+    if not isinstance(alignment, dict):
+        return False
+    return alignment.get("source_fingerprint") == official_alignment_fingerprint(
+        timeline,
+        audio_path,
+        args,
+    )
 
 
 def apply_word_alignment(timeline: dict[str, Any], alignment: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
@@ -917,7 +959,7 @@ def apply_word_alignment(timeline: dict[str, Any], alignment: dict[str, Any], ar
     updated_segments, fallback_adjustments = constrain_fallback_segments(updated_segments, timing_method, args)
     qa_flags.extend(fallback_adjustments)
     timeline["segments"] = updated_segments
-    timeline["created_at"] = datetime.now(timezone.utc).isoformat()
+    timeline["created_at"] = datetime.now(UTC).isoformat()
     timeline.setdefault("sources", {})["official_word_alignment"] = {
         "available": True,
         "method": timing_method,
@@ -1098,79 +1140,32 @@ def constrain_fallback_segments(
     return revised, flags
 
 
-def run(args: argparse.Namespace) -> tuple[Path, Path]:
+def run(args: OfficialWordsProcessorInput) -> tuple[Path, Path]:
     timeline_path = resolve_timeline(args.timeline)
     args.timeline = timeline_path
     timeline = load_json(timeline_path)
     if not isinstance(timeline, dict):
         raise RuntimeError(f"timeline must be a JSON object: {timeline_path}")
     audio_path = resolve_audio(timeline, args.audio)
-    args.output_alignment = args.output_alignment or default_alignment_output(audio_path)
+    source_fingerprint = official_alignment_fingerprint(timeline, audio_path, args)
 
     if args.output_alignment.exists() and not args.overwrite:
         alignment = load_json(args.output_alignment)
+        if not alignment_matches_current_inputs(alignment, timeline, audio_path, args):
+            alignment = build_word_alignment(timeline, audio_path, args)
+            alignment["source_fingerprint"] = source_fingerprint
+            write_json(args.output_alignment, alignment)
+            alignment = load_json(args.output_alignment)
+        elif isinstance(alignment, dict) and alignment.get("schema_version") != "1":
+            alignment["source_fingerprint"] = source_fingerprint
+            write_json(args.output_alignment, alignment)
+            alignment = load_json(args.output_alignment)
     else:
         alignment = build_word_alignment(timeline, audio_path, args)
+        alignment["source_fingerprint"] = source_fingerprint
         write_json(args.output_alignment, alignment)
 
     refined = apply_word_alignment(timeline, alignment, args)
     output_timeline = args.output_timeline or timeline_path
     write_json(output_timeline, refined)
     return args.output_alignment, output_timeline
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Block-align official transcript words to audio.")
-    parser.add_argument("--timeline", type=Path, help="timeline JSON to refine")
-    parser.add_argument("--audio", type=Path, help="MP3 path; defaults to timeline case audio_file")
-    parser.add_argument("--output-alignment", type=Path, help="official block word alignment JSON output")
-    parser.add_argument("--output-timeline", type=Path, help="timeline output; defaults to overwriting --timeline")
-    parser.add_argument("--method", choices=["asr", "block"], default="asr")
-    parser.add_argument("--cache-dir", type=Path, default=DEFAULT_ALIGNMENT_OUTPUT / "cache")
-    parser.add_argument("--min-asr-chunk-seconds", type=float, default=120.0)
-    parser.add_argument("--language", default="en")
-    parser.add_argument("--align-model", help="optional WhisperX/torchaudio alignment model name")
-    parser.add_argument("--device", choices=["cuda", "cpu"], help="alignment device")
-    parser.add_argument("--block-seconds", type=float, default=180.0)
-    parser.add_argument("--overlap-seconds", type=float, default=45.0)
-    parser.add_argument("--pad-seconds", type=float, default=12.0)
-    parser.add_argument("--min-timed-word-ratio", type=float, default=0.45)
-    parser.add_argument("--min-mean-word-score", type=float, default=0.35)
-    parser.add_argument("--min-apply-mean-word-score", type=float, default=0.35)
-    parser.add_argument("--min-word-seconds", type=float, default=0.08)
-    parser.add_argument("--long-interpolation-min-words", type=int, default=12)
-    parser.add_argument("--long-interpolation-words-per-second", type=float, default=3.0)
-    parser.add_argument("--max-turn-overlap-seconds", type=float, default=1.0)
-    parser.add_argument("--max-token-scan", type=int, default=12)
-    parser.add_argument("--min-token-match-ratio", type=float, default=0.78)
-    parser.add_argument("--interpolate-method", default="nearest", choices=["nearest", "linear", "ignore"])
-    parser.add_argument("--progress-every", type=int, default=5)
-    parser.add_argument("--max-blocks", type=int, help="debug/testing limit")
-    parser.add_argument("--apply-low-quality", action="store_true", help="also apply low-score/low-coverage turns")
-    parser.add_argument("--overwrite", action="store_true", help="rebuild existing official block word alignment output")
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    if args.progress_every < 1:
-        raise SystemExit("error: --progress-every must be at least 1")
-    if args.block_seconds <= 0:
-        raise SystemExit("error: --block-seconds must be positive")
-    if args.overlap_seconds < 0:
-        raise SystemExit("error: --overlap-seconds cannot be negative")
-    alignment_path, timeline_path = run(args)
-    alignment = load_json(alignment_path)
-    print(f"official_word_alignment: {alignment_path}")
-    print(f"timeline: {timeline_path}")
-    print(f"turns: {alignment['summary']['turns']}")
-    print(f"statuses: {alignment['summary']['status_counts']}")
-    if "block_status_counts" in alignment["summary"]:
-        print(f"blocks: {alignment['summary']['block_status_counts']}")
-    if "matched_word_ratio" in alignment["summary"]:
-        print(f"matched_word_ratio: {alignment['summary']['matched_word_ratio']}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

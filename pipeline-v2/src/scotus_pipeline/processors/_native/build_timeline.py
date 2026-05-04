@@ -3,18 +3,19 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import shutil
 import subprocess
 from collections import Counter
-from datetime import datetime, timezone
+from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.processors.contracts import BuildTimelineProcessorInput
 
-DEFAULT_OUTPUT = Path("timeline-output")
 PALETTE = [
     "#1f77b4",
     "#d62728",
@@ -36,10 +37,7 @@ def load_json(path: Path) -> Any:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, payload)
 
 
 def find_case_dir(case_dir: Path | None) -> Path:
@@ -103,10 +101,8 @@ def artifact_max_end(path: Path) -> float:
     ends = []
     for segment in segments:
         if isinstance(segment, dict):
-            try:
+            with suppress(TypeError, ValueError):
                 ends.append(float(segment.get("end", 0.0)))
-            except (TypeError, ValueError):
-                pass
     return max(ends, default=0.0)
 
 
@@ -335,7 +331,7 @@ def load_diarization(path: Path | None, duration: float) -> dict[str, Any]:
     }
 
 
-def build_timeline(args: argparse.Namespace) -> Path:
+def build_timeline(args: BuildTimelineProcessorInput) -> Path:
     case_dir = find_case_dir(args.case_dir)
     metadata_path = args.metadata or case_dir / "metadata.json"
     metadata = load_json(metadata_path)
@@ -357,10 +353,10 @@ def build_timeline(args: argparse.Namespace) -> Path:
     segments, alignment = apply_alignment(segments, alignment_path)
     if alignment.get("available"):
         segments = smooth_unaligned_between_anchors(segments, duration)
-    output = args.output or DEFAULT_OUTPUT / f"{audio_path.stem}.case-timeline.json"
+    output = args.output
 
     payload = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "case": {
             "docket": metadata.get("docket"),
             "name": metadata.get("case_name"),
@@ -395,33 +391,3 @@ def build_timeline(args: argparse.Namespace) -> Path:
     }
     write_json(output, payload)
     return output
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build a SCOTUS case timeline JSON.")
-    parser.add_argument("--case-dir", type=Path, help="archived case directory containing metadata.json")
-    parser.add_argument("--metadata", type=Path, help="metadata.json path")
-    parser.add_argument("--audio", type=Path, help="MP3 path")
-    parser.add_argument("--speaker-turns", type=Path, help="speaker-turns JSON from the v2 extract_transcript step")
-    parser.add_argument("--whisperx", type=Path, help="optional WhisperX JSON")
-    parser.add_argument("--diarization", type=Path, help="optional pyannote diarization JSON")
-    parser.add_argument("--alignment", type=Path, help="optional merged alignment JSON from the v2 merge step")
-    parser.add_argument("--output", type=Path, help="timeline JSON output path")
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    output = build_timeline(args)
-    data = load_json(output)
-    print(f"timeline: {output}")
-    print(f"case: {data['case']['docket']} {data['case']['name']}")
-    print(f"duration: {data['duration']}s")
-    print(f"speakers: {len(data['speakers'])}")
-    print(f"segments: {len(data['segments'])}")
-    print(f"timing: {data['timing']['method']} ({data['timing']['confidence']})")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

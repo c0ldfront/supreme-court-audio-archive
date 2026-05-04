@@ -3,17 +3,12 @@
 
 from __future__ import annotations
 
-import argparse
-import json
 import re
 import shutil
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
-
-DEFAULT_ARCHIVE = Path("archive/scotus-audio")
-DEFAULT_OUTPUT = Path("transcript-output")
 SPEAKER_NAME_CHARS = r"A-ZÀ-ÖØ-Þ"
 SPEAKER_RE = re.compile(
     r"^(?P<speaker>(?:CHIEF JUSTICE|JUSTICE|MR\.|MS\.|MRS\.|GENERAL|PROFESSOR|DR\.)"
@@ -128,48 +123,3 @@ def parse_speaker_turns(text: str) -> list[SpeakerTurn]:
 
     flush()
     return turns
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Extract text and speaker turns from a SCOTUS transcript PDF.")
-    parser.add_argument("--pdf", type=Path, help="PDF transcript; defaults to first archived PDF")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="output directory")
-    parser.add_argument("--raw", action="store_true", help="use raw extraction instead of layout extraction")
-    parser.add_argument("--print-preview", type=int, default=0, help="print the first N parsed speaker turns")
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    pdf_path = find_pdf(args.pdf)
-    output_dir = args.output.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    text = extract_pdf_text(pdf_path, layout=not args.raw)
-    turns = parse_speaker_turns(text)
-
-    stem = pdf_path.stem
-    text_path = output_dir / f"{stem}.txt"
-    turns_path = output_dir / f"{stem}.speaker-turns.json"
-    text_path.write_text(text, encoding="utf-8")
-    turns_path.write_text(
-        json.dumps([asdict(turn) for turn in turns], indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-    speakers = sorted({turn.speaker for turn in turns})
-    print(f"pdf: {pdf_path}")
-    print(f"text: {text_path}")
-    print(f"turns: {turns_path}")
-    print(f"speaker_turns: {len(turns)}")
-    print(f"speakers: {', '.join(speakers)}")
-
-    for turn in turns[: args.print_preview]:
-        preview = turn.text[:180] + ("..." if len(turn.text) > 180 else "")
-        print(f"\n[{turn.index}] {turn.speaker}: {preview}")
-
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

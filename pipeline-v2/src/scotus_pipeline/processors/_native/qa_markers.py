@@ -3,17 +3,15 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-
-DEFAULT_TIMELINE_OUTPUT = Path("timeline-output")
-DEFAULT_QA_OUTPUT = Path("qa-output")
+from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.processors.contracts import QaMarkersProcessorInput
 
 
 def load_json(path: Path) -> Any:
@@ -21,10 +19,7 @@ def load_json(path: Path) -> Any:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, payload)
 
 
 def resolve_timeline(explicit: Path | None) -> Path:
@@ -247,7 +242,7 @@ def shift_segment(segment: dict[str, Any], shift: float) -> None:
         segment["words"] = shifted_words
 
 
-def apply_markers(args: argparse.Namespace) -> Path:
+def apply_markers(args: QaMarkersProcessorInput) -> Path:
     timeline_path = resolve_timeline(args.timeline)
     timeline = load_json(timeline_path)
     markers_payload = load_json(args.markers)
@@ -291,7 +286,7 @@ def apply_markers(args: argparse.Namespace) -> Path:
         flags.extend(order_flags)
 
     timeline["segments"] = revised_segments
-    timeline["created_at"] = datetime.now(timezone.utc).isoformat()
+    timeline["created_at"] = datetime.now(UTC).isoformat()
     timeline.setdefault("sources", {})["qa_markers"] = {
         "available": True,
         "path": str(args.markers),
@@ -306,43 +301,14 @@ def apply_markers(args: argparse.Namespace) -> Path:
     write_json(output, timeline)
 
     report = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "timeline": str(output),
         "markers": str(args.markers),
         "marker_count": len(markers),
         "applied_turn_count": applied,
         "flags": flags,
     }
-    report_path = args.report or DEFAULT_QA_OUTPUT / f"{output.stem}.qa-marker-apply-report.json"
+    report_path = args.report
     write_json(report_path, report)
     print(f"qa_marker_report: {report_path}")
     return output
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Apply exported viewer QA markers to a timeline.")
-    parser.add_argument("--timeline", type=Path, help="case timeline JSON")
-    parser.add_argument("--markers", type=Path, required=True, help="viewer QA marker JSON export")
-    parser.add_argument("--output", type=Path, help="timeline output; defaults to overwriting --timeline")
-    parser.add_argument("--report", type=Path, help="QA apply report output")
-    parser.add_argument("--default-words-per-second", type=float, default=2.8)
-    parser.add_argument("--min-segment-duration", type=float, default=0.2)
-    parser.add_argument("--enforce-order", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--min-order-gap", type=float, default=0.0)
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    output = apply_markers(args)
-    data = load_json(output)
-    qa = data.get("sources", {}).get("qa_markers", {})
-    print(f"timeline: {output}")
-    print(f"markers: {qa.get('marker_count')}")
-    print(f"applied_turns: {qa.get('applied_turn_count')}")
-    print(f"flags: {len(qa.get('flags', []))}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

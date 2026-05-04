@@ -9,6 +9,17 @@ dependencies = [
   "rich>=13.9",
 ]
 
+[project.optional-dependencies]
+asr = [
+  "torch>=2.2",
+  "whisperx>=3.3",
+]
+
+[dependency-groups]
+dev = [
+  "ruff>=0.8",
+]
+
 [project.scripts]
 scotus-pipeline = "scotus_pipeline.cli:main"
 
@@ -17,8 +28,8 @@ line-length = 110
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "PL"]
-ignore = ["PLR0913"]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B905", "E501"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/scotus_pipeline"]

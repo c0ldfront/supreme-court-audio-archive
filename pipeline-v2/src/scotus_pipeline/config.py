@@ -31,14 +31,28 @@ class CaseConfig(StrictModel):
 
 
 class PathsConfig(StrictModel):
-    archive_dir: Path = Path("archive/scotus-audio")
-    transcript_output_dir: Path = Path("transcript-output")
-    alignment_output_dir: Path = Path("alignment-output")
-    timeline_output_dir: Path = Path("timeline-output")
-    profiles_output_dir: Path = Path("profiles-output")
-    viewer_output_dir: Path = Path("viewer-output")
-    state_dir: Path = Path("pipeline-v2/.state")
-    log_dir: Path = Path("pipeline-v2/.logs")
+    courts_dir: Path = Path(".courts")
+    output_dir: Path = Path("output")
+
+    @property
+    def sources_dir(self) -> Path:
+        return self.courts_dir / "sources"
+
+    @property
+    def source_index_dir(self) -> Path:
+        return self.sources_dir / "_index"
+
+    @property
+    def cache_dir(self) -> Path:
+        return self.courts_dir / "cache"
+
+    @property
+    def work_dir(self) -> Path:
+        return self.courts_dir / "work"
+
+    @property
+    def runs_dir(self) -> Path:
+        return self.courts_dir / "runs"
 
 
 class StepsConfig(StrictModel):

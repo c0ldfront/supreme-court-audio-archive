@@ -9,6 +9,7 @@ from scotus_pipeline.config import NotificationConfig, PipelineConfig
 from scotus_pipeline.context import (
     PipelineContext,
     build_artifacts_from_case_dir,
+    case_output_key,
     find_case_by_docket,
 )
 from scotus_pipeline.events import EventBus, EventType, Severity
@@ -35,10 +36,11 @@ class PipelineRunner:
         self.config = config
         self.config_path = config_path.resolve()
         self.workspace = self._resolve_workspace(config.project.workspace)
+        self.case_key = self._case_key(config)
         self.event_bus = EventBus()
         for notifier in build_notifiers(self._resolve_notification_paths(config.notifications)):
             self.event_bus.subscribe(notifier.notify)
-        state_path = self.workspace / config.paths.state_dir / f"{config.project.name}.state.json"
+        state_path = self.workspace / config.paths.runs_dir / self.case_key / "state.json"
         self.state_store = StateStore(state_path)
         self.state = self.state_store.load_or_create(run_id=uuid4().hex, config_path=self.config_path)
         self.context = PipelineContext(
@@ -55,13 +57,26 @@ class PipelineRunner:
             return workspace.resolve()
         return (self.config_path.parent / workspace).resolve()
 
+    def _state_stem(self, config: PipelineConfig) -> str:
+        case_token = config.case.docket or (config.case.case_dir.name if config.case.case_dir else "case")
+        term_token = "-".join(str(term) for term in config.case.term) or "any-term"
+        raw = f"{config.project.name}.{case_token}.{term_token}"
+        return "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in raw)
+
+    def _case_key(self, config: PipelineConfig) -> str:
+        return case_output_key({}, config.case.docket, config.case.case_dir or Path("case"))
+
     def _resolve_notification_paths(self, configs: list[NotificationConfig]) -> list[NotificationConfig]:
         resolved: list[NotificationConfig] = []
         for config in configs:
-            if config.path and not config.path.is_absolute():
-                resolved.append(config.model_copy(update={"path": (self.workspace / config.path).resolve()}))
-            else:
+            if not config.path:
                 resolved.append(config)
+                continue
+            path = Path(str(config.path).replace("{case}", self.case_key))
+            if path.is_absolute():
+                resolved.append(config.model_copy(update={"path": path.resolve()}))
+            else:
+                resolved.append(config.model_copy(update={"path": (self.workspace / path).resolve()}))
         return resolved
 
     def steps(self) -> list[PipelineStep]:

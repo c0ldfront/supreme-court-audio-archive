@@ -36,3 +36,16 @@ The rewrite treats the pipeline as an application:
   webhook targets.
 - TOML/YAML config becomes the source of truth for paths, case selection,
   runtime behavior, step enablement, and alignment options.
+
+## Completed Clean Breaks
+
+- The v2 runner no longer shells out to root numbered scripts.
+- Processor entrypoints now receive typed Pydantic contracts from the
+  orchestrator.
+- Primary JSON artifacts are schema-versioned and atomically written.
+- Resume now compares current input/output hashes with the recorded successful
+  step result.
+- Timeline rewrites keep immutable per-step snapshots.
+- WhisperX work is isolated behind a JSONL worker protocol.
+- Python viewer HTML generation has been removed from v2; the output is a
+  frontend-ready JSON bundle.

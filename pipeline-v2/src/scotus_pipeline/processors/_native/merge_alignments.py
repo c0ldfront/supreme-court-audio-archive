@@ -6,17 +6,14 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scotus_pipeline.processors.contracts import BuildTimelineProcessorInput
 from scotus_pipeline.processors._native import build_timeline
+from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.processors.contracts import BuildTimelineProcessorInput, MergeAlignmentProcessorInput
 
-
-DEFAULT_ARCHIVE = Path("archive/scotus-audio")
-DEFAULT_ALIGNMENT_OUTPUT = Path("alignment-output")
-DEFAULT_TIMELINE_OUTPUT = Path("timeline-output")
 STATUS_RANK = {
     "matched": 5,
     "partial_clip": 4,
@@ -31,10 +28,7 @@ def load_json(path: Path) -> Any:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, payload)
 
 
 def find_case_dir(case_dir: Path | None) -> Path:
@@ -76,7 +70,7 @@ def chunk_paths_from_report(report_path: Path) -> list[Path]:
     return paths
 
 
-def resolve_chunk_paths(args: argparse.Namespace, audio_path: Path) -> list[Path]:
+def resolve_chunk_paths(args: argparse.Namespace) -> list[Path]:
     if args.chunks:
         return [path for path in args.chunks if path.exists()]
 
@@ -86,13 +80,7 @@ def resolve_chunk_paths(args: argparse.Namespace, audio_path: Path) -> list[Path
             return from_report
 
     chunks_dir = args.chunks_dir
-    patterns = [
-        f"{audio_path.stem}.chunk-*.json",
-        f"{audio_path.stem}.align-*.json",
-    ]
-    paths: list[Path] = []
-    for pattern in patterns:
-        paths.extend(sorted(chunks_dir.glob(pattern)))
+    paths = sorted(chunks_dir.glob("*.json"))
     return [path for path in paths if path.name != "chunk-report.json"]
 
 
@@ -232,25 +220,25 @@ def rebuild_timeline(
             diarization=None,
             alignment=alignment_path,
             output=timeline_output,
-        ).to_namespace()
+        )
     )
 
 
-def build_merged_alignment(args: argparse.Namespace) -> Path:
+def build_merged_alignment(args: MergeAlignmentProcessorInput) -> Path:
     case_dir = find_case_dir(args.case_dir)
     metadata_path = args.metadata or case_dir / "metadata.json"
     metadata = load_json(metadata_path)
     audio_path = resolve_audio(metadata, case_dir, args.audio)
-    chunk_paths = resolve_chunk_paths(args, audio_path)
+    chunk_paths = resolve_chunk_paths(args)
     if not chunk_paths:
         raise FileNotFoundError("no chunk alignment JSON files found; run the v2 run_alignment step first")
 
     merged_turns, conflicts, merge_metadata = merge_chunks(chunk_paths)
     status_counts = Counter(str(turn.get("status")) for turn in merged_turns)
-    output_path = args.output or args.output_dir / f"{audio_path.stem}.merged-chunks.json"
+    output_path = args.output or args.output_dir / "merged.json"
 
     payload = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "case": {
             "docket": metadata.get("docket"),
             "name": metadata.get("case_name"),
@@ -276,51 +264,11 @@ def build_merged_alignment(args: argparse.Namespace) -> Path:
     write_json(output_path, payload)
 
     if args.rebuild_timeline:
-        timeline_output = args.timeline_output or DEFAULT_TIMELINE_OUTPUT / f"{audio_path.stem}.case-timeline.json"
+        if args.timeline_output is None:
+            raise ValueError("timeline_output is required when rebuilding the timeline")
+        timeline_output = args.timeline_output
         if not args.speaker_turns:
             raise ValueError("--speaker-turns is required when rebuilding the timeline")
         rebuild_timeline(case_dir, audio_path, output_path, args.speaker_turns, timeline_output)
 
     return output_path
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Merge chunk alignment files into one 05-compatible alignment.")
-    parser.add_argument("--case-dir", type=Path, help="archived case directory containing metadata.json")
-    parser.add_argument("--metadata", type=Path, help="metadata.json path")
-    parser.add_argument("--audio", type=Path, help="MP3 path")
-    parser.add_argument("--speaker-turns", type=Path, help="speaker-turns JSON from transcript extraction")
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_ALIGNMENT_OUTPUT)
-    parser.add_argument("--output", type=Path, help="merged alignment JSON output path")
-    parser.add_argument("--chunks-dir", type=Path, default=DEFAULT_ALIGNMENT_OUTPUT / "chunks")
-    parser.add_argument(
-        "--chunk-report",
-        type=Path,
-        default=DEFAULT_ALIGNMENT_OUTPUT / "chunks" / "chunk-report.json",
-        help="chunk report from script 07",
-    )
-    parser.add_argument("--chunks", type=Path, nargs="+", help="specific chunk alignment JSON files to merge")
-    parser.add_argument("--all-chunks", action="store_true", help="ignore chunk report and merge all chunk files")
-    parser.add_argument("--rebuild-timeline", action="store_true", help="run script 05 with the merged alignment")
-    parser.add_argument("--timeline-output", type=Path, help="timeline output path when rebuilding")
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    output = build_merged_alignment(args)
-    data = load_json(output)
-    print(f"merged_alignment: {output}")
-    print(f"case: {data['case']['docket']} {data['case']['name']}")
-    print(f"chunks: {data['alignment']['chunk_count']}")
-    print(f"turns: {data['turn_window']['turn_count']}")
-    print(f"statuses: {data['alignment']['status_counts']}")
-    print(f"conflicts: {data['alignment']['conflict_count']}")
-    if args.rebuild_timeline:
-        timeline_output = args.timeline_output or DEFAULT_TIMELINE_OUTPUT / f"{Path(data['case']['audio_file']).stem}.case-timeline.json"
-        print(f"timeline: {timeline_output}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

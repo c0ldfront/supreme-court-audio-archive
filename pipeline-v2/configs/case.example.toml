@@ -7,14 +7,8 @@ docket = "24-109"
 term = [2025]
 
 [paths]
-archive_dir = "archive/scotus-audio"
-transcript_output_dir = "transcript-output"
-alignment_output_dir = "alignment-output"
-timeline_output_dir = "timeline-output"
-profiles_output_dir = "profiles-output"
-viewer_output_dir = "viewer-output"
-state_dir = "pipeline-v2/.state"
-log_dir = "pipeline-v2/.logs"
+courts_dir = ".courts"
+output_dir = "output"
 
 [steps]
 archive = true
@@ -68,4 +62,4 @@ level = "info"
 [[notifications]]
 type = "jsonl"
 level = "debug"
-path = "pipeline-v2/.logs/events.jsonl"
+path = ".courts/runs/{case}/events.jsonl"

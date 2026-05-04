@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from scotus_pipeline.io import atomic_write_text
 from scotus_pipeline.models import StepResult, StepStatus
 
 
@@ -21,9 +22,19 @@ class PipelineState(BaseModel):
         self.steps[result.step_id] = result
         self.updated_at = dt.datetime.now(dt.UTC).isoformat()
 
-    def completed(self, step_id: str) -> bool:
+    def completed(
+        self,
+        step_id: str,
+        *,
+        input_hashes: dict[str, str] | None = None,
+        output_hashes: dict[str, str] | None = None,
+    ) -> bool:
         result = self.steps.get(step_id)
-        return bool(result and result.status == StepStatus.succeeded)
+        if not result or result.status != StepStatus.succeeded:
+            return False
+        if input_hashes is not None and result.input_hashes != input_hashes:
+            return False
+        return not (output_hashes is not None and result.output_hashes != output_hashes)
 
 
 class StateStore:
@@ -36,5 +47,4 @@ class StateStore:
         return PipelineState(run_id=run_id, config_path=config_path)
 
     def save(self, state: PipelineState) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(state.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(self.path, state.model_dump_json(indent=2) + "\n")

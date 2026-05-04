@@ -1,17 +1,27 @@
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 
+@runtime_checkable
+class ProgressCallback(Protocol):
+    def __call__(
+        self,
+        *,
+        current: int,
+        total: int,
+        message: str,
+        metrics: dict[str, Any] | None = None,
+    ) -> None:
+        raise NotImplementedError
+
+
 class ProcessorContract(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True, arbitrary_types_allowed=True)
-
-    def to_namespace(self) -> argparse.Namespace:
-        return argparse.Namespace(**self.model_dump())
+    progress: ProgressCallback | None = Field(default=None, exclude=True)
 
 
 class ProcessorResult(ProcessorContract):
@@ -56,6 +66,7 @@ class AlignmentChunksProcessorInput(ProcessorContract):
     timeline: Path
     speaker_turns: Path
     output_dir: Path
+    cache_dir: Path
     report: Path
     chunk_seconds: float = Field(default=300.0, gt=0)
     max_chunks: int | None = Field(default=None, ge=1)
@@ -68,6 +79,7 @@ class AlignmentChunksProcessorInput(ProcessorContract):
     dry_run: bool = False
     overwrite: bool = False
     workers: PositiveInt = 1
+    use_asr_worker: bool = True
 
 
 class AlignTranscriptProcessorInput(ProcessorContract):
@@ -77,6 +89,7 @@ class AlignTranscriptProcessorInput(ProcessorContract):
     speaker_turns: Path
     whisperx: Path | None = None
     output_dir: Path
+    cache_dir: Path
     output: Path
     start: float = Field(default=0.0, ge=0)
     duration: float = Field(default=300.0, gt=0)
@@ -156,6 +169,7 @@ class ViewerProcessorInput(ProcessorContract):
     timeline: Path
     profiles: Path
     output: Path
+    public_audio: Path | None = None
 
 
 class QaMarkersProcessorInput(ProcessorContract):
@@ -167,3 +181,44 @@ class QaMarkersProcessorInput(ProcessorContract):
     min_segment_duration: float = Field(default=0.2, gt=0)
     enforce_order: bool = False
     min_order_gap: float = Field(default=0.0, ge=0)
+
+
+class ArchiveProcessorResult(ProcessorResult):
+    archive_dir: Path
+
+
+class TranscriptProcessorResult(ProcessorResult):
+    text: Path
+    speaker_turns: Path
+    turn_count: int = Field(ge=0)
+
+
+class TimelineProcessorResult(ProcessorResult):
+    timeline: Path
+
+
+class AlignmentChunksProcessorResult(ProcessorResult):
+    report: Path
+
+
+class MergeAlignmentProcessorResult(ProcessorResult):
+    merged_alignment: Path
+    timeline: Path
+
+
+class OfficialWordsProcessorResult(ProcessorResult):
+    official_word_alignment: Path
+    timeline: Path
+
+
+class SpeakerProfilesProcessorResult(ProcessorResult):
+    profiles: Path
+
+
+class ViewerBundleProcessorResult(ProcessorResult):
+    bundle: Path
+
+
+class QaMarkersProcessorResult(ProcessorResult):
+    timeline: Path
+    report: Path

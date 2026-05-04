@@ -10,17 +10,16 @@ import shutil
 import subprocess
 import traceback
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scotus_pipeline.processors.contracts import AlignTranscriptProcessorInput
+from scotus_pipeline.asr.client import AsrWorkerClient
+from scotus_pipeline.asr.types import WorkerRequest
 from scotus_pipeline.processors._native import align_transcript
+from scotus_pipeline.processors._native._io import atomic_write_json, sha256_file
+from scotus_pipeline.processors.contracts import AlignmentChunksProcessorInput, AlignTranscriptProcessorInput
 
-
-DEFAULT_ARCHIVE = Path("archive/scotus-audio")
-DEFAULT_TIMELINE_OUTPUT = Path("timeline-output")
-DEFAULT_ALIGNMENT_OUTPUT = Path("alignment-output")
 GOOD_STATUSES = {"matched", "partial_clip", "low_confidence"}
 BAD_STATUSES = {"unmatched", "no_audio"}
 
@@ -30,10 +29,7 @@ def load_json(path: Path) -> Any:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_json(path, payload)
 
 
 def find_case_dir(case_dir: Path | None) -> Path:
@@ -122,9 +118,22 @@ def turns_for_window(
     return first, len(selected), selected
 
 
-def alignment_output_path(output_dir: Path, stem: str, start: float, end: float) -> Path:
+def alignment_output_path(output_dir: Path, start: float, end: float) -> Path:
     label = f"{int(start):06d}-{int(end):06d}"
-    return output_dir / "chunks" / f"{stem}.chunk-{label}.json"
+    return output_dir / "chunks" / f"{label}.json"
+
+
+def chunk_cache_key(args: argparse.Namespace, audio_path: Path, speaker_turns_path: Path | None) -> dict[str, Any]:
+    return {
+        "audio_sha256": sha256_file(audio_path) if audio_path.exists() else None,
+        "speaker_turns_sha256": (
+            sha256_file(speaker_turns_path) if speaker_turns_path is not None and speaker_turns_path.exists() else None
+        ),
+        "model_size": args.model_size,
+        "chunk_seconds": args.chunk_seconds,
+        "max_segments_per_turn": args.max_segments_per_turn,
+        "min_score": args.min_score,
+    }
 
 
 def run_chunk(
@@ -136,29 +145,55 @@ def run_chunk(
     turn_start: int,
     turn_count: int,
     output_path: Path,
+    client: AsrWorkerClient | None = None,
 ) -> dict[str, Any]:
     try:
-        align_transcript.build_alignment(
-            AlignTranscriptProcessorInput(
-                case_dir=case_dir,
-                metadata=args.metadata,
-                audio=audio_path,
-                speaker_turns=args.speaker_turns,
-                whisperx=None,
-                output_dir=args.output_dir,
-                output=output_path,
-                start=start,
-                duration=end - start,
-                full=False,
-                turn_start=turn_start,
-                turn_count=turn_count,
-                model_size=args.model_size,
-                max_segments_per_turn=args.max_segments_per_turn,
-                min_score=args.min_score,
-                overwrite=args.overwrite,
-                no_word_alignment=False,
-            ).to_namespace()
-        )
+        if client is not None:
+            client.request(
+                WorkerRequest(
+                    request_id=f"{int(start):06d}-{int(end):06d}",
+                    case_dir=case_dir,
+                    metadata=args.metadata,
+                    audio=audio_path,
+                    audio_sha256=sha256_file(audio_path),
+                    speaker_turns=args.speaker_turns,
+                    output_dir=args.output_dir,
+                    cache_dir=args.cache_dir,
+                    output=output_path,
+                    start=start,
+                    duration=end - start,
+                    turn_start=turn_start,
+                    turn_count=turn_count,
+                    model_size=args.model_size,
+                    max_segments_per_turn=args.max_segments_per_turn,
+                    min_score=args.min_score,
+                    overwrite=args.overwrite,
+                    no_word_alignment=False,
+                )
+            )
+        else:
+            align_transcript.build_alignment(
+                AlignTranscriptProcessorInput(
+                    case_dir=case_dir,
+                    metadata=args.metadata,
+                    audio=audio_path,
+                    speaker_turns=args.speaker_turns,
+                    whisperx=None,
+                    output_dir=args.output_dir,
+                    cache_dir=args.cache_dir,
+                    output=output_path,
+                    start=start,
+                    duration=end - start,
+                    full=False,
+                    turn_start=turn_start,
+                    turn_count=turn_count,
+                    model_size=args.model_size,
+                    max_segments_per_turn=args.max_segments_per_turn,
+                    min_score=args.min_score,
+                    overwrite=args.overwrite,
+                    no_word_alignment=False,
+                )
+            )
     except Exception:
         return {"returncode": 1, "stdout": [], "stderr": traceback.format_exc().splitlines()}
     return {"returncode": 0, "stdout": [f"alignment: {output_path}"], "stderr": []}
@@ -166,6 +201,8 @@ def run_chunk(
 
 def validate_existing_chunk(
     path: Path,
+    args: argparse.Namespace,
+    audio_path: Path,
     start: float,
     end: float,
     turn_start: int,
@@ -185,20 +222,15 @@ def validate_existing_chunk(
     turn_window = data.get("turn_window", {})
     alignment = data.get("alignment", {})
     aligned_turns = data.get("aligned_turns", [])
-    sources = data.get("sources", {})
     if not isinstance(window, dict) or not isinstance(turn_window, dict):
         return False
     if not isinstance(alignment, dict) or not isinstance(aligned_turns, list):
         return False
     if not isinstance(alignment.get("status_counts"), dict):
         return False
-    if speaker_turns_path is not None:
-        if not isinstance(sources, dict) or not sources.get("speaker_turns"):
-            return False
-        actual_source = Path(str(sources["speaker_turns"]))
-        if actual_source.resolve() != speaker_turns_path.resolve():
-            return False
-
+    expected_cache_key = chunk_cache_key(args, audio_path, speaker_turns_path)
+    if data.get("cache_key") != expected_cache_key:
+        return False
     try:
         output_start = float(window.get("start"))
         output_end = float(window.get("end"))
@@ -215,9 +247,8 @@ def validate_existing_chunk(
     ):
         return False
 
-    stem = path.name.split(".chunk-", 1)[0]
     label = f"{int(start):06d}-{int(end):06d}"
-    whisperx_path = path.parent.parent / "cache" / f"{stem}.{label}.whisperx.json"
+    whisperx_path = args.cache_dir / f"{label}.whisperx.json"
     return whisperx_cache_has_word_timings(whisperx_path)
 
 
@@ -266,7 +297,7 @@ def build_report_payload(
 ) -> dict[str, Any]:
     quality_counts = Counter(str(chunk.get("quality")) for chunk in chunks)
     return {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "case": {
             "docket": metadata.get("docket"),
             "name": metadata.get("case_name"),
@@ -323,7 +354,7 @@ def planned_chunk(
     end: float,
 ) -> dict[str, Any]:
     turn_start, turn_count, selected_turns = turns_for_window(segments, start, end, args.turn_padding)
-    output_path = alignment_output_path(args.output_dir, audio_path.stem, start, end)
+    output_path = alignment_output_path(args.output_dir, start, end)
     return {
         "index": chunk_index,
         "window": {
@@ -345,6 +376,7 @@ def process_chunk(
     case_dir: Path,
     audio_path: Path,
     chunk: dict[str, Any],
+    client: AsrWorkerClient | None = None,
 ) -> dict[str, Any]:
     start = float(chunk["window"]["start"])
     end = float(chunk["window"]["end"])
@@ -364,6 +396,8 @@ def process_chunk(
 
     if not args.overwrite and validate_existing_chunk(
         output_path,
+        args,
+        audio_path,
         start,
         end,
         turn_start,
@@ -373,7 +407,7 @@ def process_chunk(
         summary = summarize_alignment(output_path, args.max_bad_ratio)
         return {**chunk, **summary, "cached": True}
 
-    result = run_chunk(args, case_dir, audio_path, start, end, turn_start, turn_count, output_path)
+    result = run_chunk(args, case_dir, audio_path, start, end, turn_start, turn_count, output_path, client)
     updated = {
         **chunk,
         "returncode": result["returncode"],
@@ -385,21 +419,36 @@ def process_chunk(
     if result["returncode"] != 0:
         return {**updated, "quality": "error"}
 
+    data = load_json(output_path)
+    if isinstance(data, dict):
+        data["cache_key"] = chunk_cache_key(args, audio_path, args.speaker_turns)
+        write_json(output_path, data)
+
     return {**updated, **summarize_alignment(output_path, args.max_bad_ratio)}
 
 
-def print_chunk_progress(chunk: dict[str, Any], completed: int, total: int) -> None:
+def print_chunk_progress(args: Any, chunk: dict[str, Any], completed: int, total: int) -> None:
     window = chunk.get("window", {})
     quality = chunk.get("quality", "unknown")
     cached = " cached" if chunk.get("cached") else ""
-    print(
-        f"chunk {completed}/{total}: "
-        f"{window.get('start')}-{window.get('end')}s {quality}{cached}",
-        flush=True,
-    )
+    message = f"chunk {completed}/{total}: {window.get('start')}-{window.get('end')}s {quality}{cached}"
+    progress = getattr(args, "progress", None)
+    if progress:
+        progress(
+            current=completed,
+            total=total,
+            message=message,
+            metrics={
+                "quality": quality,
+                "cached": bool(chunk.get("cached")),
+                "window": window,
+            },
+        )
+        return
+    print(message, flush=True)
 
 
-def build_report(args: argparse.Namespace) -> Path:
+def build_report(args: AlignmentChunksProcessorInput) -> Path:
     case_dir = find_case_dir(args.case_dir)
     metadata_path = args.metadata or case_dir / "metadata.json"
     metadata = load_json(metadata_path)
@@ -420,11 +469,25 @@ def build_report(args: argparse.Namespace) -> Path:
 
     report_path = write_progress_report(args, metadata, metadata_path, audio_path, timeline_path, windows, chunks)
 
+    if getattr(args, "use_asr_worker", False):
+        stderr_path = args.cache_dir / "asr-worker.stderr.log"
+        with AsrWorkerClient(cwd=Path.cwd(), stderr_path=stderr_path) as client:
+            for chunk in planned_chunks:
+                completed = process_chunk(args, case_dir, audio_path, chunk, client)
+                chunks.append(completed)
+                print_chunk_progress(args, completed, len(chunks), len(planned_chunks))
+                report_path = write_progress_report(
+                    args, metadata, metadata_path, audio_path, timeline_path, windows, chunks
+                )
+                if completed.get("quality") in {"warning", "error"} and args.stop_on_warning:
+                    break
+        return report_path
+
     if args.stop_on_warning or args.workers == 1:
         for chunk in planned_chunks:
             completed = process_chunk(args, case_dir, audio_path, chunk)
             chunks.append(completed)
-            print_chunk_progress(completed, len(chunks), len(planned_chunks))
+            print_chunk_progress(args, completed, len(chunks), len(planned_chunks))
             report_path = write_progress_report(
                 args, metadata, metadata_path, audio_path, timeline_path, windows, chunks
             )
@@ -440,49 +503,9 @@ def build_report(args: argparse.Namespace) -> Path:
         for future in concurrent.futures.as_completed(futures):
             completed = future.result()
             chunks.append(completed)
-            print_chunk_progress(completed, len(chunks), len(planned_chunks))
+            print_chunk_progress(args, completed, len(chunks), len(planned_chunks))
             report_path = write_progress_report(
                 args, metadata, metadata_path, audio_path, timeline_path, windows, chunks
             )
 
     return report_path
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run transcript/audio alignment in cacheable chunks.")
-    parser.add_argument("--case-dir", type=Path, help="archived case directory containing metadata.json")
-    parser.add_argument("--metadata", type=Path, help="metadata.json path")
-    parser.add_argument("--audio", type=Path, help="MP3 path")
-    parser.add_argument("--timeline", type=Path, help="case timeline JSON from the v2 build_timeline step")
-    parser.add_argument("--speaker-turns", type=Path, help="speaker-turns JSON from transcript extraction")
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_ALIGNMENT_OUTPUT)
-    parser.add_argument("--report", type=Path, help="chunk report JSON output path")
-    parser.add_argument("--chunk-seconds", type=float, default=300.0)
-    parser.add_argument("--max-chunks", type=int, help="process only the first N chunks")
-    parser.add_argument("--turn-padding", type=int, default=3)
-    parser.add_argument("--model-size", default="tiny.en")
-    parser.add_argument("--max-segments-per-turn", type=int, default=30)
-    parser.add_argument("--min-score", type=float, default=0.45)
-    parser.add_argument("--max-bad-ratio", type=float, default=0.5)
-    parser.add_argument("--stop-on-warning", action="store_true", help="stop when a chunk exceeds max bad ratio")
-    parser.add_argument("--dry-run", action="store_true", help="write the chunk plan without running alignment")
-    parser.add_argument("--overwrite", action="store_true", help="overwrite cached chunk outputs")
-    parser.add_argument("--workers", type=int, default=1, help="number of chunks to process concurrently")
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    if args.workers < 1:
-        raise SystemExit("error: --workers must be at least 1")
-    report_path = build_report(args)
-    report = load_json(report_path)
-    print(f"chunk_report: {report_path}")
-    print(f"case: {report['case']['docket']} {report['case']['name']}")
-    print(f"chunks: {report['summary']['completed_chunks']}/{report['summary']['planned_chunks']}")
-    print(f"quality: {report['summary']['quality_counts']}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
