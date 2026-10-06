@@ -1,78 +1,97 @@
 # SCOTUS Transcript Pipeline
 
-Archive Supreme Court oral argument audio and official transcripts, align words
-and speaker turns using WhisperX, and build an interactive transcript viewer.
+Turn U.S. Supreme Court oral arguments into searchable, synchronized audio
+transcripts. The Python pipeline downloads official audio and transcript PDFs,
+extracts speaker turns, aligns words with WhisperX, and produces a portable
+bundle. The Astro viewer adds playback, speaker navigation, transcript search,
+word highlighting, and QA markers.
 
-## Project layout
+Alignment is experimental. A completed run can contain low-confidence timings;
+review the reported quality warnings before sharing a case viewer.
 
-| Path | Purpose |
-| --- | --- |
-| `pipeline/` | Python package, CLI, case configurations, and tests |
-| `viewer/` | Astro transcript viewer |
-| `legacy/` | Original numbered scripts, their environment, and preserved outputs |
-| `.courts/` | Local source audio, transcripts, alignment cache, state, and logs (ignored) |
-| `output/<docket>/` | Generated viewer bundles and packaged sites (ignored) |
+## Requirements
 
-## Process a case
+- Python 3.12 and [uv](https://docs.astral.sh/uv/).
+- Node.js 22.12 or later and npm for the viewer.
+- `ffmpeg` (including `ffprobe`) and Poppler's `pdftotext` for case processing.
+- WhisperX and PyTorch for fresh alignment, installed with the `asr` extra.
+  CUDA is used when available; otherwise WhisperX runs on CPU with int8 compute.
+
+On Debian or Ubuntu, system dependencies can be installed with
+`sudo apt install ffmpeg poppler-utils`.
+
+## Quick start
+
+From the repository root:
 
 ```bash
 cd pipeline
-uv sync
-uv run scotus-pipeline validate configs/case.example.toml
-uv run scotus-pipeline plan configs/case.example.toml
+uv sync --extra asr
+uv run --extra asr scotus-pipeline validate configs/case-24-624.toml
+uv run --extra asr scotus-pipeline run configs/case-24-624.toml --dry-run
+uv run --extra asr scotus-pipeline run configs/case-24-624.toml
 ```
 
-For fresh audio alignment, install the optional dependencies with
-`uv sync --extra asr`. The pipeline also requires `ffmpeg`, `ffprobe`, and
-`pdftotext`. See [pipeline documentation](pipeline/README.md) for full runs,
-resume behavior, and configuration. `configs/case-24-624.toml` contains the
-existing configuration for docket 24-624.
+The supplied configurations resolve their workspace to the repository root.
+A dry run shows enabled steps without downloading data, running models, or
+writing artifacts. To inspect the pipeline without installing model dependencies,
+use `uv sync` and omit `--extra asr`.
 
-## Build the viewer
+To process another case, copy an example config and change `[case].docket` and
+`[case].term`. `scotus-pipeline init-config case.toml` creates a standalone
+configuration whose workspace is the directory containing that file.
 
-After the pipeline produces `output/<docket>/bundle.json` and `audio.mp3`:
+## Build a case viewer
+
+After processing a case:
 
 ```bash
 cd viewer
 npm ci
-npm run build:case -- 24-624 --base /your-repository/24-624/
+npm run build:case -- 24-624
 ```
 
-See [viewer documentation](viewer/README.md) for development and deployment.
-The existing GitHub Pages base remains `/supreme-court-ingest/`; override
-`--base` when deploying under another repository name.
-
-## Verify changes
+The resulting site is `output/24-624/site/`. Serve that directory with any static
+HTTP server. For example, from the repository root:
 
 ```bash
-cd pipeline
-uv run python -m unittest discover -s tests -v
-cd ../viewer
-npm run typecheck
-npm run build
+python -m http.server 8080 --directory output/24-624/site
 ```
 
-## Legacy implementation
-
-The original workflow remains in [legacy/](legacy/README.md). Run its commands
-from that directory; `legacy/run_pipeline.sh` sets its working directory itself.
-Historical output folders retain their original names and contents there.
-Generated audio, caches, logs, and output bundles are local artifacts, not source.
-They are preserved on disk and excluded from future commits. Previously tracked
-outputs remain recoverable from checkpoint commit `407fc4e`.
-
-Existing cached metadata may contain absolute paths from the former checkout
-location. Regenerate a case if those historical paths prevent reuse. Python
-virtual environments are also local: use `uv sync` in the relevant package to
-refresh them after relocation.
-
-For a dry run against existing source files, supply the case directory explicitly:
+For hosting under a URL prefix, supply it explicitly:
 
 ```bash
-cd pipeline
-uv run scotus-pipeline run configs/case-24-624.toml --dry-run --no-resume --case-dir ../.courts/sources/24-624
+npm run build:case -- 24-624 --base /court-transcripts/24-624/
 ```
 
-The existing dry-run implementation requires resolved case artifacts; a dry run
-starting with only a docket fails after the archive step. Use `plan` for cases
-that have not been archived yet.
+The build preserves the pipeline's `bundle.json` and `audio.mp3`. No deployment
+runs automatically. A plain `npm run build` produces an empty landing page;
+case data is not bundled into source control.
+
+## Repository layout
+
+| Directory | Contents |
+| --- | --- |
+| `pipeline/src/scotus_pipeline/` | CLI, orchestration, processors, and ASR worker |
+| `pipeline/configs/` | Example case configurations |
+| `pipeline/tests/` | Offline regression tests |
+| `viewer/src/` | Astro components and browser code |
+| `viewer/scripts/`, `viewer/tests/` | Case packaging and integration tests |
+| `docs/` | Architecture, operation, and release notes |
+| `.github/workflows/` | Python and frontend checks |
+
+Runtime data is ignored: `.courts/` holds sources, cache, working artifacts,
+logs, and state; `output/<docket>/` holds bundles and generated sites.
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and contribution conventions.
+The tests use temporary synthetic fixtures and do not download court recordings
+or speech models. CI also builds and installs the Python wheel to exercise the
+packaged CLI and config template.
+
+- [Pipeline usage](pipeline/README.md)
+- [Viewer usage](viewer/README.md)
+- [Architecture](docs/architecture.md)
+- [Troubleshooting and quality checks](docs/operations.md)
+- [Release review](docs/release.md)

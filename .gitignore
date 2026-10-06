@@ -1,23 +1,26 @@
-# Local environments and secrets
-.venv/
+# Local configuration, environments, and tools
 .env
+.env.*
+!.env.example
+.venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
 .ruff_cache/
 .pytest_cache/
-*.egg-info/
+.DS_Store
+/.local/
+/.claude/
 
-# Current pipeline runtime data and published case bundles
+# Generated pipeline artifacts
 /.courts/
 /output/
-
-# Historical pipeline run state
 /pipeline/.logs*/
 /pipeline/.state*/
 
-# Preserved legacy runtime data
-/legacy/archive/
-/legacy/artifacts/
-/legacy/*-output/
-/legacy/*-output-new/
-/legacy/viewer-template-preview/
+# Build artifacts
+dist/
+build/
+node_modules/
+.astro/
+.case-public/
