@@ -1,55 +1,78 @@
-import { cp, mkdir, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const viewerRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(viewerRoot, "..");
 
-function argValue(name) {
-  const index = process.argv.indexOf(name);
-  return index === -1 ? undefined : process.argv[index + 1];
+export function validateDocket(docket) {
+  if (typeof docket !== "string" || !/^[0-9]+-[A-Za-z0-9-]+$/.test(docket)) {
+    throw new Error("Provide a docket such as 24-624.");
+  }
+  return docket;
 }
 
-const docket = process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : process.env.SCOTUS_CASE_DOCKET;
-if (!docket) {
-  console.error("Usage: npm run build:case -- <docket> [--base /repo/<docket>/]");
-  process.exit(2);
+export function normalizeBase(base) {
+  if (!base.startsWith("/") || base.startsWith("//") || /[?#\\\s]/.test(base) || base.split("/").includes("..")) {
+    throw new Error("--base must be a URL path such as /court-transcripts/24-624/.");
+  }
+  return base.endsWith("/") ? base : `${base}/`;
 }
 
-const sourceDir = resolve(repoRoot, "output", docket);
-const stagePublicDir = resolve(viewerRoot, ".case-public", docket);
-const outDir = sourceDir;
-const base = argValue("--base") || process.env.ASTRO_BASE || `/supreme-court-ingest/${docket}/`;
-
-const bundlePath = resolve(sourceDir, "bundle.json");
-const audioPath = resolve(sourceDir, "audio.mp3");
-const bundle = JSON.parse(await readFile(bundlePath, "utf-8"));
-const caseTitle = bundle.case?.name || `Case ${docket}`;
-
-await rm(stagePublicDir, { recursive: true, force: true });
-await mkdir(stagePublicDir, { recursive: true });
-await cp(bundlePath, resolve(stagePublicDir, "bundle.json"));
-await cp(audioPath, resolve(stagePublicDir, "audio.mp3"));
-
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const result = spawnSync(npm, ["run", "build"], {
-  cwd: viewerRoot,
-  stdio: "inherit",
-  env: {
-    ...process.env,
-    ASTRO_BASE: base,
-    SCOTUS_CASE_DOCKET: docket,
-    SCOTUS_CASE_TITLE: caseTitle,
-    SCOTUS_OUT_DIR: outDir,
-    SCOTUS_PUBLIC_DIR: stagePublicDir,
-  },
-});
-
-if (result.status !== 0) {
-  process.exit(result.status ?? 1);
+export async function buildCase(docket, { base = "/", outputRoot = resolve(repoRoot, "output") } = {}) {
+  validateDocket(docket);
+  base = normalizeBase(base);
+  const sourceDir = resolve(outputRoot, docket);
+  const bundlePath = resolve(sourceDir, "bundle.json");
+  const bundle = JSON.parse(await readFile(bundlePath, "utf-8"));
+  if (bundle.schema_version !== "1" || bundle.case?.docket !== docket || bundle.audio_src !== "audio.mp3") {
+    throw new Error("Bundle must have schema_version 1, the requested docket, and audio_src audio.mp3.");
+  }
+  const stagingRoot = resolve(viewerRoot, ".case-public");
+  await mkdir(stagingRoot, { recursive: true });
+  const stage = await mkdtemp(resolve(stagingRoot, "build-"));
+  const publicDir = resolve(stage, "public");
+  const siteDir = resolve(stage, "site");
+  try {
+    await mkdir(publicDir);
+    await cp(bundlePath, resolve(publicDir, "bundle.json"));
+    await cp(resolve(sourceDir, "audio.mp3"), resolve(publicDir, "audio.mp3"));
+    const result = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], {
+      cwd: viewerRoot,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        ASTRO_BASE: base,
+        SCOTUS_CASE_DOCKET: docket,
+        SCOTUS_CASE_TITLE: bundle.case?.name || `Case ${docket}`,
+        SCOTUS_OUT_DIR: siteDir,
+        SCOTUS_PUBLIC_DIR: publicDir,
+      },
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`Viewer build failed (exit ${result.status}).`);
+    const destination = resolve(sourceDir, "site");
+    await rm(destination, { recursive: true, force: true });
+    await cp(siteDir, destination, { recursive: true });
+    return destination;
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
 }
 
-await rm(resolve(outDir, "cases"), { recursive: true, force: true });
+async function main() {
+  const [docket, ...args] = process.argv.slice(2);
+  if (args.length && (args.length !== 2 || args[0] !== "--base")) {
+    throw new Error("Usage: npm run build:case -- <docket> [--base /repository/docket/]");
+  }
+  const destination = await buildCase(docket, { base: args[1] || process.env.ASTRO_BASE || "/" });
+  console.log(`Built static viewer: ${destination}`);
+}
 
-console.log(`Built static viewer for ${docket}: ${outDir}`);
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

@@ -5,11 +5,10 @@ import QaDialog from "./QaDialog.astro";
 
 interface Props {
   base: string;
-  dataRoot?: string;
-  bundleUrl?: string;
+  bundleUrl: string;
 }
 
-const { base, dataRoot, bundleUrl } = Astro.props;
+const { base, bundleUrl } = Astro.props;
 ---
 
 <div
@@ -17,8 +16,6 @@ const { base, dataRoot, bundleUrl } = Astro.props;
   class="viewer-shell"
   data-base={base}
   data-bundle-url={bundleUrl}
-  data-timeline-url={dataRoot ? `${dataRoot}/timeline.json` : undefined}
-  data-profiles-url={dataRoot ? `${dataRoot}/profiles.json` : undefined}
 >
   <div class="viewer-status" id="viewer-status" role="status" aria-live="polite">
     <div class="loader" aria-hidden="true"></div>

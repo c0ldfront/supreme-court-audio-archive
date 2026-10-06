@@ -1,67 +1,42 @@
 # SCOTUS Viewer
 
-Astro frontend for Supreme Court case bundles produced by `../pipeline/`.
-
-## Commands
+Astro frontend for the pipeline's versioned case bundles. Requires Node.js 22.12+
+with npm. Run commands from this directory.
 
 ```bash
-npm install
-npm run dev
+npm ci
 npm run typecheck
+npm test
 npm run build
 ```
 
-Build a GitHub Pages-ready static viewer for a pipeline output:
+The default build is an empty landing page. There are no embedded case fixtures,
+recordings, or hard-coded links to historical demo cases.
+
+## Package a case
 
 ```bash
 npm run build:case -- 24-624
+npm run build:case -- 24-624 --base /court-transcripts/24-624/
 ```
 
-That command reads `../output/24-624/{bundle.json,audio.mp3}`, stages those
-assets for Astro, and writes the packaged static viewer back to
-`../output/24-624/`.
+Input: `../output/<docket>/bundle.json` and `audio.mp3`.
+Output: `../output/<docket>/site/`, containing HTML, browser assets, the bundle,
+and audio. The base defaults to `/`; `ASTRO_BASE` supplies an alternative default.
+`ASTRO_SITE` optionally supplies the deployment origin to Astro.
 
-For GitHub Pages project sites, set the repository base path before building:
+The packager checks docket and bundle identity before building. It stages inputs
+in a temporary directory, builds there, and replaces the generated `site/` only
+after Astro succeeds. Input bundles and recordings remain intact on build errors.
+Serve the generated folder over HTTP; opening HTML with `file://` cannot reliably
+fetch the bundle. Publication is a separate operation.
 
-```bash
-ASTRO_BASE=/your-repo-name/ npm run build
-```
+`npm run dev` and `npm run preview` serve the generic landing page by default.
+Use a packaged case with a local static server to inspect real case data.
 
-For a packaged case folder, include the docket in the base path:
+## Features
 
-```bash
-npm run build:case -- 24-624 --base /supreme-court-ingest/24-624/
-```
-
-The convenience script defaults to `/supreme-court-ingest/`:
-
-```bash
-npm run build:github
-```
-
-## Data Layout
-
-```text
-../output/<docket>/
-  index.html
-  _astro/
-  bundle.json
-  audio.mp3
-```
-
-The packaged viewer loads `bundle.json` at runtime. The bundle contains the
-timeline and speaker profiles, and its `audio_src` points to the adjacent
-`audio.mp3`.
-
-## Current Scope
-
-- Static Astro archive index.
-- Static Astro case route at `/cases/2025/24-109/`.
-- Native audio playback.
-- Argument timeline click-to-seek.
-- Speaker list and active speaker portrait.
-- Transcript turn following.
-- Word-level highlighting with configurable offset.
-- Spacebar play/pause.
-- Light/dark theme.
-- QA marker selection and JSON export.
+Audio playback, speaker selection, transcript search, timeline seeking,
+word-level highlighting with adjustable offset, theme switching, and QA marker
+export. Alignment quality depends on the pipeline output; the viewer does not
+verify transcript timing accuracy.

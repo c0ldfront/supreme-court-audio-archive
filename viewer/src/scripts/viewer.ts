@@ -212,20 +212,13 @@ async function init(): Promise<void> {
   loadTheme();
   setStatus(dom, "loading", "Loading case data...");
   const bundleUrl = dom.root.dataset.bundleUrl || "";
-  const timelineUrl = dom.root.dataset.timelineUrl || "";
-  const profilesUrl = dom.root.dataset.profilesUrl || "";
-
-  let timeline: AnyObject;
-  let profiles: AnyObject;
-  let audioSrc = "";
-  if (bundleUrl) {
-    const bundle = await fetchJson(bundleUrl);
-    timeline = bundle.timeline || {};
-    profiles = bundle.profiles || {};
-    audioSrc = typeof bundle.audio_src === "string" ? bundle.audio_src : "";
-  } else {
-    [timeline, profiles] = await Promise.all([fetchJson(timelineUrl), fetchJson(profilesUrl)]);
+  const bundle = await fetchJson(bundleUrl);
+  if (bundle.schema_version !== "1" || !bundle.timeline || !bundle.profiles) {
+    throw new Error("Unsupported or incomplete case bundle.");
   }
+  const timeline: AnyObject = bundle.timeline;
+  const profiles: AnyObject = bundle.profiles;
+  const audioSrc = typeof bundle.audio_src === "string" ? bundle.audio_src : "";
 
   state.timeline = timeline;
   state.profiles = Array.isArray(profiles.profiles) ? profiles.profiles : [];
@@ -239,7 +232,7 @@ async function init(): Promise<void> {
   state.qaMode = dom.qaMode.checked;
   state.wordOffset = Number(dom.wordOffset.value || 0);
 
-  dom.audio.src = audioSrc || timeline.case?.audio_url || timeline.case?.audio_file || "";
+  dom.audio.src = new URL(audioSrc, new URL(bundleUrl, window.location.href)).href;
   renderMeta(dom, state);
   renderSpeakers(dom, state);
   state.speakerElementById = new Map(

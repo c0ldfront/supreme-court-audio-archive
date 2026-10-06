@@ -4,42 +4,28 @@ import ViewerShell from "../components/ViewerShell.astro";
 
 const base = import.meta.env.BASE_URL;
 const caseDocket = process.env.SCOTUS_CASE_DOCKET;
-const caseTitle = process.env.SCOTUS_CASE_TITLE || (caseDocket ? `Case ${caseDocket}` : "SCOTUS Audio Archive");
-const caseHref = `${base}cases/2025/24-109/`;
+const caseTitle = process.env.SCOTUS_CASE_TITLE || `Case ${caseDocket}`;
 ---
 
 <BaseLayout
-  title={caseDocket ? `${caseTitle} · SCOTUS Viewer` : "SCOTUS Audio Archive"}
-  description={caseDocket ? `Static viewer for Supreme Court docket ${caseDocket}.` : "Supreme Court oral argument transcript archive."}
+  title={caseDocket ? `${caseTitle} · SCOTUS Viewer` : "SCOTUS Transcript Viewer"}
+  description="Supreme Court oral argument audio with synchronized transcripts and speaker profiles."
   bodyClass={caseDocket ? undefined : "archive-body"}
 >
-  {
-    caseDocket ? (
-      <>
-        <ViewerShell base={base} bundleUrl={`${base}bundle.json`} />
-
-        <script>
-          import "../scripts/viewer.ts";
-        </script>
-      </>
-    ) : (
-      <main class="archive-shell">
-        <header class="archive-hero">
-          <p class="archive-label">Supreme Court transcripts</p>
-          <h1>Supreme Court audio viewers</h1>
-          <p>
-            Static case viewers generated from processed timeline, speaker profile, and word alignment data.
-          </p>
-        </header>
-
-        <section class="case-list" aria-label="Available cases">
-          <a class="case-card" href={caseHref}>
-            <span class="case-term">2025 term</span>
-            <strong>Louisiana v. Callais</strong>
-            <span>24-109 · argued October 15, 2025 · 150 min</span>
-          </a>
-        </section>
-      </main>
-    )
-  }
+  {caseDocket ? (
+    <ViewerShell base={base} bundleUrl={`${base}bundle.json`} />
+  ) : (
+    <main class="archive-shell">
+      <header class="archive-hero">
+        <p class="archive-label">Supreme Court transcripts</p>
+        <h1>SCOTUS Transcript Viewer</h1>
+        <p>No case is loaded. Open a packaged case viewer to explore its oral argument and transcript.</p>
+      </header>
+    </main>
+  )}
+  <script>
+    if (document.getElementById("viewer-root")) {
+      import("../scripts/viewer");
+    }
+  </script>
 </BaseLayout>
