@@ -166,7 +166,7 @@ class PipelineRunner:
                         severity=Severity.error,
                     )
                     return 1
-                if step.step_id == "archive" and not self.context.dry_run:
+                if step.step_id == "archive" and step.enabled and not self.context.dry_run:
                     try:
                         self.context.artifacts = find_case_by_docket(self.context)
                     except FileNotFoundError as exc:

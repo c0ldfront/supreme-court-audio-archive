@@ -45,6 +45,19 @@ class RunnerTests(unittest.TestCase):
             result = ExtractTranscriptStep(enabled=False).run(runner.context)
             self.assertEqual(StepStatus.skipped, result.status)
 
+    def test_explicit_case_directory_survives_disabled_archive(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case_dir = root / "external-case"
+            case_dir.mkdir()
+            (case_dir / "metadata.json").write_text('{"docket": "24-624"}')
+            (case_dir / "audio.mp3").write_bytes(b"audio")
+            (case_dir / "transcript.pdf").write_bytes(b"pdf")
+            runner = self.make_runner(root)
+            runner.config.case.case_dir = case_dir
+            self.assertEqual(0, runner.run(only_step="archive"))
+            self.assertEqual(case_dir, runner.context.artifacts.case_dir)
+
     def test_unknown_step_is_rejected(self) -> None:
         with TemporaryDirectory() as tmp:
             runner = self.make_runner(Path(tmp), dry_run=True)
