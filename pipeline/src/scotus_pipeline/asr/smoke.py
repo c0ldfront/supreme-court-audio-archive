@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import tempfile
 from pathlib import Path
@@ -16,8 +17,10 @@ from scotus_pipeline.io import atomic_write_json, sha256_file
 def run_smoke(
     audio: Path, *, seconds: float = 15.0, model_size: str = "tiny.en", timeout_seconds: float = 300.0
 ) -> dict:
-    if seconds <= 0 or seconds > 60:
+    if not math.isfinite(seconds) or seconds <= 0 or seconds > 60:
         raise ValueError("Smoke duration must be greater than zero and at most 60 seconds")
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("Smoke timeout must be finite and greater than zero")
     audio = audio.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="scotus-asr-smoke-") as directory:
         root = Path(directory)

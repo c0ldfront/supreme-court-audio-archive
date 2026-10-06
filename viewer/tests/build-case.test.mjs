@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { buildCase, normalizeBase, validateDocket } from "../scripts/build-case.mjs";
+import { buildCase, replaceSite, normalizeBase, validateDocket } from "../scripts/build-case.mjs";
 
 test("docket and base cannot escape the case directory", () => {
   assert.equal(validateDocket("24-624"), "24-624");
@@ -36,5 +36,33 @@ test("case packaging builds a portable site and preserves source artifacts on fa
     assert.equal(await readFile(resolve(site, "index.html"), "utf8"), html);
   } finally {
     await rm(outputRoot, {recursive: true, force: true});
+  }
+});
+
+
+test("site replacement preserves the previous build after copy and rename failures", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "scotus-publish-test-"));
+  const source = resolve(root, "source");
+  const destination = resolve(root, "site");
+  await mkdir(source);
+  await mkdir(destination);
+  await writeFile(resolve(source, "index.html"), "new site");
+  await writeFile(resolve(destination, "index.html"), "previous site");
+  try {
+    await assert.rejects(replaceSite(source, destination, {
+      copy: async () => { throw new Error("disk full"); },
+    }), /disk full/);
+    assert.equal(await readFile(resolve(destination, "index.html"), "utf8"), "previous site");
+    await assert.rejects(replaceSite(source, destination, {
+      move: async (from, to) => {
+        if (from.endsWith("/next")) throw new Error("rename failed");
+        return rename(from, to);
+      },
+    }), /rename failed/);
+    assert.equal(await readFile(resolve(destination, "index.html"), "utf8"), "previous site");
+    await replaceSite(source, destination);
+    assert.equal(await readFile(resolve(destination, "index.html"), "utf8"), "new site");
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

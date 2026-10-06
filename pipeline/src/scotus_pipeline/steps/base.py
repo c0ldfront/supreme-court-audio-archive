@@ -140,7 +140,7 @@ class PipelineStep(ABC):
             result = self.execute(context)
             outputs = self.outputs(context)
             metadata.update(result.model_dump(mode="json"))
-            output_hashes = hash_existing(outputs)
+            output_hashes = hash_existing(outputs, require_all=True)
             valid, error, validation_metadata = self.validate_success(context, metadata)
             metadata.update(validation_metadata)
             if not valid:

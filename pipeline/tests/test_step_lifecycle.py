@@ -58,6 +58,17 @@ class StepLifecycleTests(unittest.TestCase):
             self.assertEqual(first.output_hashes, resumed.output_hashes)
             self.assertEqual(2, hashing.call_count)
 
+    def test_missing_declared_output_fails_and_cannot_resume(self) -> None:
+        with TemporaryDirectory() as tmp:
+            context = self.context(Path(tmp))
+            step = FileStep()
+            with patch.object(step, "execute", return_value=ProcessorResult()):
+                result = step.run(context)
+            self.assertEqual(StepStatus.failed, result.status)
+            self.assertIn("output.txt", result.metadata["error"])
+            context.state.record(result)
+            self.assertEqual(StepStatus.succeeded, step.run(context).status)
+
     def test_execution_and_validation_failures_have_one_failure_event(self) -> None:
         for failure in ("execute", "validate_success"):
             with self.subTest(failure=failure), TemporaryDirectory() as tmp:

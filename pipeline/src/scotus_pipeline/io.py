@@ -46,7 +46,7 @@ def hash_existing(paths: list[Path], *, require_all: bool = False) -> dict[str, 
                     digest.update(sha256_file(child).encode())
             hashes[str(path)] = digest.hexdigest()
         elif require_all:
-            raise FileNotFoundError(f"declared pipeline input does not exist: {path}")
+            raise FileNotFoundError(f"declared pipeline artifact does not exist: {path}")
     return hashes
 
 

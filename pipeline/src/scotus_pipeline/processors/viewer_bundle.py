@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import os
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from scotus_pipeline.artifacts import SpeakerProfilesV1, TimelineV1, ViewerBundleV1
-from scotus_pipeline.io import atomic_write_json
+from scotus_pipeline.io import atomic_write_json, copy_snapshot
 from scotus_pipeline.processors.contracts import ViewerBundleProcessorResult, ViewerProcessorInput
 
 PATH_KEYS = {
@@ -70,8 +69,11 @@ def scrub_local_paths(value: Any, key: str | None = None) -> None:
                 scrub_local_paths(child_value, child_key)
         return
     if isinstance(value, list):
-        for item in value:
-            scrub_local_paths(item, key)
+        for index, item in enumerate(value):
+            if isinstance(item, str) and key and is_local_path_key(key) and not is_url(item):
+                value[index] = None
+            else:
+                scrub_local_paths(item, key)
 
 
 def is_local_path_key(key: str) -> bool:
@@ -85,6 +87,10 @@ def is_url(value: str) -> bool:
 def build_viewer_bundle(input: ViewerProcessorInput) -> ViewerBundleProcessorResult:
     timeline = TimelineV1.model_validate_json(input.timeline.read_text(encoding="utf-8"))
     profiles = SpeakerProfilesV1.model_validate_json(input.profiles.read_text(encoding="utf-8"))
+    if profiles.case.docket != timeline.case.docket:
+        raise ValueError(
+            f"profile docket mismatch: expected {timeline.case.docket}, got {profiles.case.docket}"
+        )
     audio_file = timeline.case.audio_file
     if not audio_file:
         raise ValueError("timeline case metadata has no audio_file")
@@ -99,7 +105,7 @@ def build_viewer_bundle(input: ViewerProcessorInput) -> ViewerBundleProcessorRes
     if input.public_audio is not None:
         input.public_audio.parent.mkdir(parents=True, exist_ok=True)
         if not input.public_audio.exists() or input.public_audio.resolve() != audio_path.resolve():
-            shutil.copy2(audio_path, input.public_audio)
+            copy_snapshot(audio_path, input.public_audio)
         audio_src_path = input.public_audio
         outputs.append(input.public_audio)
     audio_src = relative_asset(audio_src_path, output)

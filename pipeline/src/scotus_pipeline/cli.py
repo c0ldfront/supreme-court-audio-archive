@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from importlib.resources import files
 from pathlib import Path
 
+import yaml
 from rich.console import Console
 from rich.table import Table
 
@@ -111,6 +113,6 @@ def _main(argv: list[str] | None = None) -> int:
 def main(argv: list[str] | None = None) -> int:
     try:
         return _main(argv)
-    except (OSError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError, yaml.YAMLError, subprocess.CalledProcessError) as exc:
         Console(stderr=True).print(f"Error: {exc}", style="bold red", markup=False)
         return 2

@@ -14,11 +14,56 @@ from scotus_pipeline.asr.types import WorkerRequest
 from scotus_pipeline.io import atomic_write_json, sha256_file
 from scotus_pipeline.models import StepResult, StepStatus
 from scotus_pipeline.processors import official_words
-from scotus_pipeline.processors.contracts import OfficialWordsProcessorInput
+from scotus_pipeline.processors.contracts import OfficialWordsProcessorInput, ViewerProcessorInput
+from scotus_pipeline.processors.viewer_bundle import build_viewer_bundle, scrub_local_paths
 from scotus_pipeline.state import PipelineState
 
 
 class PipelineContractTests(unittest.TestCase):
+    def test_bundle_rejects_profiles_from_another_docket(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio = root / "audio.mp3"
+            audio.write_bytes(b"audio")
+            timeline = root / "timeline.json"
+            profiles = root / "profiles.json"
+            atomic_write_json(
+                timeline,
+                {
+                    "case": {"docket": "24-624", "audio_file": str(audio)},
+                    "duration": 1,
+                },
+            )
+            atomic_write_json(
+                profiles,
+                {
+                    "case": {"docket": "24-999", "audio_file": str(audio)},
+                    "profiles": [],
+                },
+            )
+            output = root / "bundle.json"
+            output.write_text("previous bundle")
+            with self.assertRaisesRegex(ValueError, "profile docket mismatch"):
+                build_viewer_bundle(
+                    ViewerProcessorInput(
+                        timeline=timeline,
+                        profiles=profiles,
+                        output=output,
+                    )
+                )
+            self.assertEqual(output.read_text(), "previous bundle")
+
+    def test_public_bundle_scrubs_path_lists_and_retains_urls(self) -> None:
+        payload = {
+            "sources": {
+                "transcript_file": ["/home/private.pdf", "https://court/file.pdf"],
+                "nested": {"cache_dir": "/home/cache"},
+            }
+        }
+        scrub_local_paths(payload)
+        self.assertEqual(payload["sources"]["transcript_file"], [None, "https://court/file.pdf"])
+        self.assertIsNone(payload["sources"]["nested"]["cache_dir"])
+
     def test_atomic_json_writes_schema_version(self) -> None:
         with TemporaryDirectory() as tmp:
             output = Path(tmp) / "artifact.json"

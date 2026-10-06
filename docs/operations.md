@@ -21,13 +21,18 @@ resume skips. Each timeline-producing stage writes its own file under
 `.courts/work/<docket>/timeline/`, so downstream changes do not overwrite earlier
 stage results. Resume fingerprints include validated processing settings. The
 canonical `timeline.json` is refreshed when the final viewer bundle is written.
+A stage fails if any declared output is missing after processing; it cannot
+save a successful resume checkpoint without those files.
 
 QA marker files are combined in configured order and calibrated together. Profiles
 are built after QA so their totals reflect the published transcript. Marker files
 are treated as one anchor set; overlapping anchors participate in the same fit.
 
 After moving a checkout, cached artifacts can retain old absolute paths. Source
-discovery falls back to the audio and PDF in the current case folder. Reprocess
+discovery prefers the audio and PDF in the current case folder over recorded
+absolute paths. Relative metadata paths resolve against that case folder.
+An explicit case folder must match the configured docket. Malformed metadata
+in unrelated archive folders is skipped during discovery. Reprocess
 the case with `--no-resume` if an artifact identity check rejects older data.
 Do not edit fingerprints to force cache reuse.
 
@@ -48,6 +53,10 @@ Serve `output/<docket>/site/` over HTTP. A blank landing page means a generic
 frontend build was served instead of a packaged case. A missing bundle or audio
 usually means the site's URL prefix differs from the `--base` used at build time.
 Rebuild with the correct prefix; the deployment origin can be set via `ASTRO_SITE`.
+Case packaging stages the replacement beside the destination and restores the
+previous site if replacement fails. If rollback itself fails, the error reports
+the retained backup path. Bundles reject profiles with a different docket and
+scrub local source paths; public audio is copied through a temporary file.
 
 ## Worker deadlines and model cache
 

@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -18,6 +18,40 @@ export function normalizeBase(base) {
     throw new Error("--base must be a URL path such as /court-transcripts/24-624/.");
   }
   return base.endsWith("/") ? base : `${base}/`;
+}
+
+// Stage on the destination filesystem so a failed copy leaves the current site intact.
+export async function replaceSite(source, destination, { copy = cp, move = rename } = {}) {
+  const stage = await mkdtemp(resolve(dirname(destination), ".site-publish-"));
+  const next = resolve(stage, "next");
+  const previous = resolve(stage, "previous");
+  let backedUp = false;
+  let preserveBackup = false;
+  try {
+    await copy(source, next, { recursive: true });
+    try {
+      await move(destination, previous);
+      backedUp = true;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    try {
+      await move(next, destination);
+    } catch (error) {
+      if (backedUp) {
+        try {
+          await move(previous, destination);
+        } catch (rollbackError) {
+          preserveBackup = true;
+          throw new Error(`Site replacement and rollback failed; previous site saved at ${previous}.`,
+            { cause: rollbackError });
+        }
+      }
+      throw error;
+    }
+  } finally {
+    if (!preserveBackup) await rm(stage, { recursive: true, force: true });
+  }
 }
 
 export async function buildCase(docket, { base = "/", outputRoot = resolve(repoRoot, "output") } = {}) {
@@ -53,8 +87,7 @@ export async function buildCase(docket, { base = "/", outputRoot = resolve(repoR
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`Viewer build failed (exit ${result.status}).`);
     const destination = resolve(sourceDir, "site");
-    await rm(destination, { recursive: true, force: true });
-    await cp(siteDir, destination, { recursive: true });
+    await replaceSite(siteDir, destination);
     return destination;
   } finally {
     await rm(stage, { recursive: true, force: true });

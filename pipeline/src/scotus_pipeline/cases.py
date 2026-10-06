@@ -18,6 +18,8 @@ def build_artifacts_from_case_dir(context: PipelineContext, case_dir: Path) -> C
         raise FileNotFoundError(metadata_path)
 
     metadata = context.read_json(metadata_path)
+    if not isinstance(metadata, dict):
+        raise ValueError(f"case metadata must be an object: {metadata_path}")
     audio = _resolve_audio(metadata, case_dir)
     transcript_pdf = _resolve_transcript(metadata, case_dir)
     return build_artifacts(context, case_dir, metadata_path, audio, transcript_pdf)
@@ -31,6 +33,12 @@ def build_artifacts(
     transcript_pdf: Path,
 ) -> CaseArtifacts:
     metadata_payload = context.read_json(metadata)
+    if not isinstance(metadata_payload, dict):
+        raise ValueError(f"case metadata must be an object: {metadata}")
+    configured = context.config.case.docket
+    actual = metadata_payload.get("docket")
+    if configured and actual and normalize_docket(str(actual)) != normalize_docket(configured):
+        raise ValueError(f"case docket mismatch: expected {configured}, got {actual}")
     case_number = case_output_key(metadata_payload, context.config.case.docket, case_dir)
     output_dir = context.resolve(context.config.paths.output_dir) / case_number
     source_dir = context.resolve(context.config.paths.sources_dir) / case_number
@@ -70,9 +78,12 @@ def find_case_by_docket(context: PipelineContext) -> CaseArtifacts:
             metadata = context.read_json(metadata_path)
         except (OSError, json.JSONDecodeError):
             continue
-        if normalize_docket(str(metadata.get("docket", ""))) != docket:
+        if not isinstance(metadata, dict) or normalize_docket(str(metadata.get("docket", ""))) != docket:
             continue
-        term = int(metadata.get("term", 0) or 0)
+        try:
+            term = int(metadata.get("term", 0) or 0)
+        except (ValueError, TypeError):
+            continue
         if terms and term not in terms:
             continue
         date = str(metadata.get("date_argued_iso") or metadata.get("date_argued") or "")
@@ -100,28 +111,30 @@ def normalize_docket(value: str) -> str:
 def case_output_key(metadata: dict[str, Any], configured_docket: str | None, case_dir: Path) -> str:
     raw = str(metadata.get("docket") or configured_docket or case_dir.name)
     key = re.sub(r"[^A-Za-z0-9._-]+", "-", raw.strip())
-    return key.strip("-") or "case"
+    return key.strip(".-").lower() or "case"
+
+
+def _resolve_source(metadata: dict[str, Any], case_dir: Path, field: str, suffix: str) -> Path:
+    entry = metadata.get(field)
+    if isinstance(entry, dict) and entry.get("path"):
+        recorded = Path(str(entry["path"]))
+        # Relocated archives must use their local copy before stale absolute paths.
+        local = case_dir / (recorded.name if recorded.is_absolute() else recorded)
+        if local.is_file():
+            return local.resolve()
+    matches = sorted(case_dir.glob(f"*{suffix}"))
+    if matches:
+        return matches[0].resolve()
+    if isinstance(entry, dict) and entry.get("path"):
+        recorded = Path(str(entry["path"]))
+        if recorded.is_absolute() and recorded.is_file():
+            return recorded.resolve()
+    raise FileNotFoundError(f"no {suffix} source found in {case_dir}")
 
 
 def _resolve_audio(metadata: dict[str, Any], case_dir: Path) -> Path:
-    audio_file = metadata.get("audio_file")
-    if isinstance(audio_file, dict) and audio_file.get("path"):
-        path = Path(str(audio_file["path"]))
-        if path.exists():
-            return path.resolve()
-    matches = sorted(case_dir.glob("*.mp3"))
-    if not matches:
-        raise FileNotFoundError(f"no MP3 found in {case_dir}")
-    return matches[0].resolve()
+    return _resolve_source(metadata, case_dir, "audio_file", ".mp3")
 
 
 def _resolve_transcript(metadata: dict[str, Any], case_dir: Path) -> Path:
-    transcript_file = metadata.get("transcript_file")
-    if isinstance(transcript_file, dict) and transcript_file.get("path"):
-        path = Path(str(transcript_file["path"]))
-        if path.exists():
-            return path.resolve()
-    matches = sorted(case_dir.glob("*.pdf"))
-    if not matches:
-        raise FileNotFoundError(f"no transcript PDF found in {case_dir}")
-    return matches[0].resolve()
+    return _resolve_source(metadata, case_dir, "transcript_file", ".pdf")
