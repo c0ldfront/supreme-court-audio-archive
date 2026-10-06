@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev --host 127.0.0.1",
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
+    "build:case": "node scripts/build-case.mjs",
     "build:github": "ASTRO_BASE=${ASTRO_BASE:-/supreme-court-ingest/} npm run build",
     "typecheck": "ASTRO_TELEMETRY_DISABLED=1 astro sync && tsc --noEmit",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview --host 127.0.0.1"

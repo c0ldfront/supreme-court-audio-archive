@@ -11,10 +11,26 @@ npm run typecheck
 npm run build
 ```
 
+Build a GitHub Pages-ready static viewer for a v2 pipeline output:
+
+```bash
+npm run build:case -- 24-624
+```
+
+That command reads `../../output/24-624/{bundle.json,audio.mp3}`, stages those
+assets for Astro, and writes the packaged static viewer back to
+`../../output/24-624/`.
+
 For GitHub Pages project sites, set the repository base path before building:
 
 ```bash
 ASTRO_BASE=/your-repo-name/ npm run build
+```
+
+For a packaged case folder, include the docket in the base path:
+
+```bash
+npm run build:case -- 24-624 --base /supreme-court-ingest/24-624/
 ```
 
 The convenience script defaults to `/supreme-court-ingest/`:
@@ -26,12 +42,16 @@ npm run build:github
 ## Data Layout
 
 ```text
-public/data/cases/2025/24-109/
-  timeline.json
-  profiles.json
+../../output/<docket>/
+  index.html
+  _astro/
+  bundle.json
+  audio.mp3
 ```
 
-The viewer loads these JSON files at runtime. The MP3 is not copied into this playground; the page uses the official SCOTUS `audio_url` from the timeline data.
+The packaged viewer loads `bundle.json` at runtime. The bundle contains the
+timeline and speaker profiles, and its `audio_src` points to the adjacent
+`audio.mp3`.
 
 ## Current Scope
 

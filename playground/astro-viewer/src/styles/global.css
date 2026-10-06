@@ -290,20 +290,6 @@ h2 {
   min-height: 42px;
 }
 
-.time-line {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
-  align-items: center;
-  margin-top: 10px;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.time-line input {
-  width: 100%;
-}
-
 .control-grid {
   display: grid;
   grid-template-columns: 1fr;

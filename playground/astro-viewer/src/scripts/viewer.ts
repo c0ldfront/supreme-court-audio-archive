@@ -82,8 +82,6 @@ function refreshActiveClasses(): void {
 }
 
 function updateActive(forceScroll = false): void {
-  dom.currentTime.textContent = seconds(dom.audio.currentTime);
-  if (!dom.seek.matches(":active")) dom.seek.value = String(dom.audio.currentTime);
   updatePlayhead(dom, state);
 
   const event = findEvent(state, dom.audio.currentTime);
@@ -150,14 +148,9 @@ function bindEvents(): void {
   const debouncedSearch = debounce(() => applySearch(dom, state), 120);
 
   dom.audio.addEventListener("timeupdate", () => requestAnimationFrame(() => updateActive()));
-  dom.audio.addEventListener("loadedmetadata", () => {
-    dom.seek.max = String(dom.audio.duration || state.timeline.duration || 0);
-    dom.duration.textContent = seconds(dom.audio.duration || state.timeline.duration || 0);
-  });
   dom.audio.addEventListener("error", () => {
     setStatus(dom, "error", "Audio could not be loaded. Use the official audio link from the case data.");
   });
-  dom.seek.addEventListener("input", () => seekTo(Number(dom.seek.value)));
   dom.wordOffset.addEventListener("input", () => {
     state.wordOffset = Number(dom.wordOffset.value || 0);
     updateActiveWord(findSegment(state, dom.audio.currentTime) || {});
@@ -218,9 +211,22 @@ async function fetchJson(url: string): Promise<AnyObject> {
 async function init(): Promise<void> {
   loadTheme();
   setStatus(dom, "loading", "Loading case data...");
+  const bundleUrl = dom.root.dataset.bundleUrl || "";
   const timelineUrl = dom.root.dataset.timelineUrl || "";
   const profilesUrl = dom.root.dataset.profilesUrl || "";
-  const [timeline, profiles] = await Promise.all([fetchJson(timelineUrl), fetchJson(profilesUrl)]);
+
+  let timeline: AnyObject;
+  let profiles: AnyObject;
+  let audioSrc = "";
+  if (bundleUrl) {
+    const bundle = await fetchJson(bundleUrl);
+    timeline = bundle.timeline || {};
+    profiles = bundle.profiles || {};
+    audioSrc = typeof bundle.audio_src === "string" ? bundle.audio_src : "";
+  } else {
+    [timeline, profiles] = await Promise.all([fetchJson(timelineUrl), fetchJson(profilesUrl)]);
+  }
+
   state.timeline = timeline;
   state.profiles = Array.isArray(profiles.profiles) ? profiles.profiles : [];
   state.profileById = new Map(state.profiles.map((profile) => [profile.id, profile]));
@@ -233,7 +239,7 @@ async function init(): Promise<void> {
   state.qaMode = dom.qaMode.checked;
   state.wordOffset = Number(dom.wordOffset.value || 0);
 
-  dom.audio.src = timeline.case?.audio_url || timeline.case?.audio_file || "";
+  dom.audio.src = audioSrc || timeline.case?.audio_url || timeline.case?.audio_file || "";
   renderMeta(dom, state);
   renderSpeakers(dom, state);
   state.speakerElementById = new Map(

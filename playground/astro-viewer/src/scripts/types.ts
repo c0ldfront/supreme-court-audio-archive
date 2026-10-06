@@ -5,9 +5,6 @@ export type ViewerDom = {
   audio: HTMLAudioElement;
   caseTitle: HTMLElement;
   caseMeta: HTMLElement;
-  currentTime: HTMLElement;
-  duration: HTMLElement;
-  seek: HTMLInputElement;
   wordOffset: HTMLInputElement;
   autoFollow: HTMLInputElement;
   qaMode: HTMLInputElement;

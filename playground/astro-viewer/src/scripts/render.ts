@@ -16,8 +16,6 @@ export function renderMeta(dom: ViewerDom, state: ViewerState): void {
     .map((item) => `<span>${escapeHtml(item)}</span>`)
     .join("");
   dom.timelineSummary.textContent = `${state.segments.length} turns · ${state.events.length} no-speech gaps`;
-  dom.duration.textContent = seconds(Number(state.timeline.duration || 0));
-  dom.seek.max = String(Number(state.timeline.duration || 0));
 }
 
 export function renderSpeakers(dom: ViewerDom, state: ViewerState): void {
