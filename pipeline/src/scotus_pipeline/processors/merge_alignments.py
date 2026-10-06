@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from collections import Counter
 from datetime import UTC, datetime
@@ -70,7 +69,7 @@ def chunk_paths_from_report(report_path: Path) -> list[Path]:
     return paths
 
 
-def resolve_chunk_paths(args: argparse.Namespace) -> list[Path]:
+def resolve_chunk_paths(args: MergeAlignmentProcessorInput) -> list[Path]:
     if args.chunks:
         return [path for path in args.chunks if path.exists()]
 

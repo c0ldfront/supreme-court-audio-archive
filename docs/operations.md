@@ -17,9 +17,14 @@ considerably longer.
 ## State and paths
 
 State and logs are under `.courts/runs/<docket>/`. Successful step hashes survive
-resume skips. Shared timeline files are rewritten by later stages, so some
-upstream stages may rerun on a subsequent invocation. After changing processing
-settings, use `--no-resume`; step hashes do not include the full config.
+resume skips. Each timeline-producing stage writes its own file under
+`.courts/work/<docket>/timeline/`, so downstream changes do not overwrite earlier
+stage results. Resume fingerprints include validated processing settings. The
+canonical `timeline.json` is refreshed when the final viewer bundle is written.
+
+QA marker files are combined in configured order and calibrated together. Profiles
+are built after QA so their totals reflect the published transcript. Marker files
+are treated as one anchor set; overlapping anchors participate in the same fit.
 
 After moving a checkout, cached artifacts can retain old absolute paths. Source
 discovery falls back to the audio and PDF in the current case folder. Reprocess
@@ -43,3 +48,15 @@ Serve `output/<docket>/site/` over HTTP. A blank landing page means a generic
 frontend build was served instead of a packaged case. A missing bundle or audio
 usually means the site's URL prefix differs from the `--base` used at build time.
 Rebuild with the correct prefix; the deployment origin can be set via `ASTRO_SITE`.
+
+## Worker deadlines and model cache
+
+A request exceeding `alignment.request_timeout_seconds` fails with a timeout;
+the worker is terminated and reaped. Error exits also close its pipes and log
+handle. Models are reused for subsequent chunks in the same worker, avoiding
+repeated model loading. Raw inference caches validate clip content and model
+settings; audio clip caches validate the source recording and window.
+
+Use `scotus-pipeline smoke-asr AUDIO --seconds 15 --timeout 300` for an uncached
+inference check. This validates actual transcription and timed words, not the
+accuracy of a full case's transcript alignment.

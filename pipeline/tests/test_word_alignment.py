@@ -89,6 +89,24 @@ class WordAlignmentTests(unittest.TestCase):
                 run(args)
                 self.assertEqual(2, build.call_count)
 
+    def test_settings_and_asr_cache_changes_rebuild_alignment(self) -> None:
+        with TemporaryDirectory() as tmp:
+            args = self.case(Path(tmp))
+            with patch(
+                "scotus_pipeline.processors.official_words.service.build_word_alignment",
+                wraps=build_word_alignment,
+            ) as build:
+                run(args)
+                args.min_mean_word_score = 0.5
+                run(args)
+                self.assertEqual(2, build.call_count)
+                cache = args.cache_dir / "000000-000300.whisperx.json"
+                payload = json.loads(cache.read_text())
+                payload["segments"][0]["words"][0]["start"] = 0.1
+                atomic_write_json(cache, payload)
+                run(args)
+                self.assertEqual(3, build.call_count)
+
     def test_block_alignment_runs_with_injected_model(self) -> None:
         with TemporaryDirectory() as tmp:
             args = self.case(Path(tmp), method="block")

@@ -8,6 +8,7 @@ from scotus_pipeline.artifacts import (
     validate_timeline_file,
 )
 from scotus_pipeline.context import PipelineContext
+from scotus_pipeline.io import atomic_write_json, read_json
 from scotus_pipeline.processors import (
     qa_markers,
 )
@@ -27,26 +28,37 @@ class ApplyQaMarkersStep(PipelineStep):
         return artifacts.work_dir / "qa" / "qa-marker-apply-report.json"
 
     def outputs(self, context: PipelineContext) -> list[Path]:
-        artifacts = context.require_artifacts()
-        return [artifacts.timeline, self.report_path(context)]
+        return [context.stage_timeline(self.step_id), self.report_path(context)]
 
     def inputs(self, context: PipelineContext) -> list[Path]:
-        artifacts = context.require_artifacts()
-        return [artifacts.timeline, *[context.resolve(path) for path in context.config.qa.markers]]
+        return [
+            context.input_timeline(self.step_id),
+            *[context.resolve(path) for path in context.config.qa.markers],
+        ]
 
     def execute(self, context: PipelineContext) -> QaMarkersProcessorResult:
         artifacts = context.require_artifacts()
         markers = context.config.qa.markers
         if not markers:
             raise RuntimeError("QA marker step enabled without qa.markers")
-        marker = context.resolve(markers[0])
+        combined = []
+        for path in markers:
+            payload = read_json(context.resolve(path))
+            entries = payload.get("markers") if isinstance(payload, dict) else payload
+            if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+                raise ValueError(f"Invalid QA marker export: {path}")
+            combined.extend(entries)
+        marker = artifacts.work_dir / "qa" / "combined-markers.json"
+        atomic_write_json(
+            marker, {"markers": combined, "sources": [str(context.resolve(p)) for p in markers]}
+        )
         report = self.report_path(context)
         output = qa_markers.apply_markers(
             QaMarkersProcessorInput(
                 progress=self.progress_callback(context),
-                timeline=artifacts.timeline,
+                timeline=context.input_timeline(self.step_id),
                 markers=marker,
-                output=artifacts.timeline,
+                output=context.stage_timeline(self.step_id),
                 report=report,
                 default_words_per_second=2.8,
                 min_segment_duration=0.2,
@@ -59,5 +71,5 @@ class ApplyQaMarkersStep(PipelineStep):
             timeline=output,
             report=report,
             outputs=[output, report],
-            metrics={"markers": str(marker)},
+            metrics={"marker_files": len(markers), "marker_count": len(combined)},
         )

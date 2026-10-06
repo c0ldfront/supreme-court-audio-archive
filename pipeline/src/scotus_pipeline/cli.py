@@ -37,6 +37,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--only-step", help="run one step id")
     run.add_argument("--from-step", help="start from a step id")
 
+    smoke = subcommands.add_parser("smoke-asr", help="run uncached inference on a short local recording")
+    smoke.add_argument("audio", type=Path)
+    smoke.add_argument("--seconds", type=float, default=15.0)
+    smoke.add_argument("--model", default="tiny.en")
+    smoke.add_argument("--timeout", type=float, default=300.0)
+
     init = subcommands.add_parser("init-config", help="copy the example config to a new path")
     init.add_argument("output", type=Path)
     return parser
@@ -45,6 +51,15 @@ def build_parser() -> argparse.ArgumentParser:
 def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     console = Console()
+
+    if args.command == "smoke-asr":
+        from scotus_pipeline.asr.smoke import run_smoke
+
+        result = run_smoke(
+            args.audio, seconds=args.seconds, model_size=args.model, timeout_seconds=args.timeout
+        )
+        console.print(json.dumps(result))
+        return 0
 
     if args.command == "init-config":
         source = files("scotus_pipeline").joinpath("templates/case.toml")
@@ -96,6 +111,6 @@ def _main(argv: list[str] | None = None) -> int:
 def main(argv: list[str] | None = None) -> int:
     try:
         return _main(argv)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         Console(stderr=True).print(f"Error: {exc}", style="bold red", markup=False)
         return 2

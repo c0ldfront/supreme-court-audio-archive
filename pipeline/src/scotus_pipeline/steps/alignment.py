@@ -31,31 +31,26 @@ class RunAlignmentStep(PipelineStep):
 
     def outputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.chunk_report]
+        return [
+            artifacts.chunk_report,
+            *sorted((artifacts.chunk_report.parent / "chunks").glob("*.json")),
+            *sorted((artifacts.cache_dir / "asr").glob("*.whisperx.json")),
+        ]
 
     def inputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.audio, artifacts.timeline, artifacts.speaker_turns]
+        return [artifacts.audio, context.input_timeline(self.step_id), artifacts.speaker_turns]
 
     def execute(self, context: PipelineContext) -> AlignmentChunksProcessorResult:
         artifacts = context.require_artifacts()
         alignment = context.config.alignment
-        workers = 1
-        if alignment.workers != workers:
-            context.event_bus.emit(
-                EventType.step_output,
-                "native WhisperX alignment is serialized to avoid shared GPU/model state",
-                severity=Severity.warning,
-                step_id=self.step_id,
-                data={"requested_workers": alignment.workers, "effective_workers": workers},
-            )
         report = alignment_chunks.build_report(
             AlignmentChunksProcessorInput(
                 progress=self.progress_callback(context),
                 case_dir=artifacts.case_dir,
                 metadata=artifacts.metadata,
                 audio=artifacts.audio,
-                timeline=artifacts.timeline,
+                timeline=context.input_timeline(self.step_id),
                 speaker_turns=artifacts.speaker_turns,
                 output_dir=artifacts.merged_alignment.parent,
                 cache_dir=artifacts.cache_dir / "asr",
@@ -70,7 +65,7 @@ class RunAlignmentStep(PipelineStep):
                 stop_on_warning=alignment.stop_on_warning,
                 dry_run=False,
                 overwrite=alignment.overwrite,
-                workers=workers,
+                request_timeout_seconds=alignment.request_timeout_seconds,
                 use_asr_worker=True,
             )
         )
@@ -78,7 +73,7 @@ class RunAlignmentStep(PipelineStep):
         return AlignmentChunksProcessorResult(
             report=report,
             outputs=[report],
-            metrics={"requested_workers": alignment.workers, "effective_workers": workers},
+            metrics={"effective_workers": 1},
         )
 
     def validate_success(
@@ -128,11 +123,15 @@ class AlignOfficialWordsStep(PipelineStep):
 
     def outputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.official_word_alignment, artifacts.timeline]
+        return [artifacts.official_word_alignment, context.stage_timeline(self.step_id)]
 
     def inputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.audio, artifacts.timeline]
+        return [
+            artifacts.audio,
+            context.input_timeline(self.step_id),
+            *sorted((artifacts.cache_dir / "asr").glob("*.whisperx.json")),
+        ]
 
     def execute(self, context: PipelineContext) -> OfficialWordsProcessorResult:
         artifacts = context.require_artifacts()
@@ -140,10 +139,10 @@ class AlignOfficialWordsStep(PipelineStep):
         alignment, timeline = official_words.run(
             OfficialWordsProcessorInput(
                 progress=self.progress_callback(context),
-                timeline=artifacts.timeline,
+                timeline=context.input_timeline(self.step_id),
                 audio=artifacts.audio,
                 output_alignment=artifacts.official_word_alignment,
-                output_timeline=artifacts.timeline,
+                output_timeline=context.stage_timeline(self.step_id),
                 method=official.method,
                 cache_dir=artifacts.cache_dir / "asr",
                 min_asr_chunk_seconds=120.0,

@@ -33,6 +33,27 @@ def official_alignment_fingerprint(
         "audio_file": path_identity(audio_path),
         "audio_sha256": sha256_file(audio_path),
         "method": args.method,
+        "settings": args.model_dump(
+            mode="json",
+            exclude={
+                "progress",
+                "timeline",
+                "audio",
+                "output_alignment",
+                "output_timeline",
+                "cache_dir",
+                "overwrite",
+                "progress_every",
+            },
+        ),
+        "asr_cache": {p.name: sha256_file(p) for p in sorted(args.cache_dir.glob("*.whisperx.json"))}
+        if args.method == "asr"
+        else {},
+        "segment_timing": [
+            {"start": s.get("start"), "end": s.get("end")} for s in iter_timeline_segments(timeline)
+        ]
+        if args.method == "block"
+        else [],
         "transcript_sha256": transcript_digest,
         "turn_count": len(segments),
     }

@@ -129,10 +129,16 @@ output/<docket>/audio.mp3
 
 State is stored at `.courts/runs/<docket>/state.json`. Each `StepResult` stores
 the input and output hashes used for the skip decision. Successful records are
-preserved when a later run skips the same stage. State is scoped by docket, not
-configuration or term; use separate workspaces for independent runs of a docket.
+preserved when a later run skips the same stage. Each result also stores a hash
+of processing configuration; older records lacking that hash are recomputed.
+State is scoped by docket; use separate workspaces for independent runs.
+
+Timeline stages write distinct files (`build_timeline.json`, `merge_alignment.json`,
+`align_official_words.json`, `refine_speech_gaps.json`, `apply_qa_markers.json`).
+Each stage consumes the preceding enabled timeline stage. QA precedes profiles;
+the bundle step also copies the final timeline to the canonical `timeline.json`.
 
 Official-word alignment artifacts also store a `source_fingerprint` over docket,
-audio hash, method, and transcript turn text. Existing alignment JSON is reused
+audio hash, method, processing settings, ASR cache hashes, and transcript turn text. Existing alignment JSON is reused
 only when that fingerprint matches the current timeline, which catches stale
 files even if their outer case metadata was rewritten.

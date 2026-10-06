@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import time
 import traceback
 from abc import ABC, abstractmethod
@@ -73,6 +75,8 @@ class PipelineStep(ABC):
         input_hashes: dict[str, str] = {}
         output_hashes: dict[str, str] = {}
         processor = self.processor_name()
+        settings = context.config.model_dump(mode="json", exclude={"notifications", "runtime", "project"})
+        config_fingerprint = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()
         metadata: dict[str, Any] = {"processor": processor}
 
         def finish(status: StepStatus, *, snapshots: dict[str, Path] | None = None) -> StepResult:
@@ -86,6 +90,7 @@ class PipelineStep(ABC):
                 input_hashes=input_hashes,
                 output_hashes=output_hashes,
                 snapshots=snapshots or {},
+                config_fingerprint=config_fingerprint,
                 metadata=metadata,
             )
 
@@ -113,6 +118,7 @@ class PipelineStep(ABC):
                 self.step_id,
                 input_hashes=input_hashes,
                 output_hashes=output_hashes,
+                config_fingerprint=config_fingerprint,
             ):
                 metadata["reason"] = "already completed in state"
                 context.event_bus.emit(EventType.step_skipped, metadata["reason"], step_id=self.step_id)
@@ -132,6 +138,7 @@ class PipelineStep(ABC):
                 return finish(StepStatus.succeeded)
 
             result = self.execute(context)
+            outputs = self.outputs(context)
             metadata.update(result.model_dump(mode="json"))
             output_hashes = hash_existing(outputs)
             valid, error, validation_metadata = self.validate_success(context, metadata)
@@ -156,7 +163,7 @@ class PipelineStep(ABC):
         if context.artifacts is None:
             return {}
         snapshots: dict[str, Path] = {}
-        timeline = context.artifacts.timeline
+        timeline = context.stage_timeline(self.step_id)
         for output in outputs:
             if output != timeline or not output.exists():
                 continue

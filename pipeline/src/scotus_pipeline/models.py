@@ -61,4 +61,5 @@ class StepResult(DomainModel):
     input_hashes: dict[str, str] = Field(default_factory=dict)
     output_hashes: dict[str, str] = Field(default_factory=dict)
     snapshots: dict[str, Path] = Field(default_factory=dict)
+    config_fingerprint: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

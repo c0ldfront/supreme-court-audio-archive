@@ -31,9 +31,12 @@ class PipelineState(BaseModel):
         *,
         input_hashes: dict[str, str] | None = None,
         output_hashes: dict[str, str] | None = None,
+        config_fingerprint: str | None = None,
     ) -> bool:
         result = self.steps.get(step_id)
         if not result or result.status != StepStatus.succeeded:
+            return False
+        if config_fingerprint is not None and result.config_fingerprint != config_fingerprint:
             return False
         if input_hashes is not None and result.input_hashes != input_hashes:
             return False

@@ -78,8 +78,8 @@ class AlignmentChunksProcessorInput(ProcessorContract):
     stop_on_warning: bool = False
     dry_run: bool = False
     overwrite: bool = False
-    workers: PositiveInt = 1
     use_asr_worker: bool = True
+    request_timeout_seconds: float = Field(default=1800.0, gt=0)
 
 
 class AlignTranscriptProcessorInput(ProcessorContract):

@@ -248,7 +248,11 @@ def apply_markers(args: QaMarkersProcessorInput) -> Path:
     timeline_path = resolve_timeline(args.timeline)
     timeline = load_json(timeline_path)
     markers_payload = load_json(args.markers)
-    markers = markers_payload.get("markers", markers_payload)
+    markers = (
+        markers_payload.get("markers", markers_payload)
+        if isinstance(markers_payload, dict)
+        else markers_payload
+    )
     if not isinstance(markers, list):
         raise RuntimeError("marker input must be a marker export object or marker list")
 

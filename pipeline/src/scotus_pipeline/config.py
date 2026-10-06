@@ -80,11 +80,11 @@ class AlignmentConfig(StrictModel):
     enabled: bool = True
     chunk_seconds: float = Field(default=300.0, gt=0)
     max_chunks: int | None = Field(default=None, ge=1)
-    workers: PositiveInt = 1
     model_size: str = "tiny.en"
     max_bad_ratio: float = Field(default=0.5, ge=0, le=1)
     stop_on_warning: bool = False
     overwrite: bool = False
+    request_timeout_seconds: float = Field(default=1800.0, gt=0)
 
 
 class OfficialWordsConfig(StrictModel):
@@ -103,7 +103,6 @@ class QaConfig(StrictModel):
 
 class RuntimeConfig(StrictModel):
     resume: bool = True
-    max_retries: int = Field(default=0, ge=0)
     quiet: bool = False
 
 

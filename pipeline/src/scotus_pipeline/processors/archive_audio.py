@@ -8,7 +8,6 @@ downloads the MP3 files into a stable directory layout with metadata.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import html
 import json
@@ -377,7 +376,7 @@ def write_json(path: Path, payload: object) -> None:
     atomic_write_json(path, payload)
 
 
-def select_terms(args: argparse.Namespace) -> list[int]:
+def select_terms(args: ArchiveProcessorInput) -> list[int]:
     if args.term:
         terms = sorted(set(args.term), reverse=True)
     else:
@@ -390,7 +389,7 @@ def select_terms(args: argparse.Namespace) -> list[int]:
     return terms
 
 
-def filter_index_records(records: list[IndexRecord], args: argparse.Namespace) -> list[IndexRecord]:
+def filter_index_records(records: list[IndexRecord], args: ArchiveProcessorInput) -> list[IndexRecord]:
     filtered = records
     if args.docket:
         wanted = {normalize_lookup(docket) for docket in args.docket}
@@ -554,17 +553,3 @@ def archive_records(args: ArchiveProcessorInput) -> int:
         return 2
     print(f"Archived metadata for {len(manifest_records)} records.")
     return 0
-
-
-def positive_float(value: str) -> float:
-    parsed = float(value)
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("value must be non-negative")
-    return parsed
-
-
-def positive_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("value must be at least 1")
-    return parsed

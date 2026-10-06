@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from scotus_pipeline.asr.dependencies import require_asr_dependencies
-from scotus_pipeline.io import atomic_write_json
+from scotus_pipeline.asr.models import alignment_model, transcription_model
+from scotus_pipeline.io import atomic_write_json, sha256_file
 from scotus_pipeline.processors.contracts import AlignTranscriptProcessorInput
 
 
@@ -91,7 +92,18 @@ def clip_audio(
     output_dir.mkdir(parents=True, exist_ok=True)
     end_label = "full" if duration is None else f"{int(start + duration):06d}"
     clip_path = output_dir / f"{int(start):06d}-{end_label}.wav"
-    if clip_path.exists() and not overwrite:
+    identity_path = clip_path.with_suffix(".source.json")
+    identity = {
+        "schema_version": "1",
+        "audio_sha256": sha256_file(audio_path),
+        "start": start,
+        "duration": duration,
+    }
+    try:
+        cached_identity = load_json(identity_path)
+    except (OSError, ValueError):
+        cached_identity = None
+    if clip_path.exists() and not overwrite and cached_identity == identity:
         return clip_path
 
     command = [
@@ -99,7 +111,7 @@ def clip_audio(
         "-hide_banner",
         "-loglevel",
         "error",
-        "-y" if overwrite else "-n",
+        "-y",
         "-ss",
         str(start),
         "-i",
@@ -109,6 +121,7 @@ def clip_audio(
         command.extend(["-t", str(duration)])
     command.extend(["-ac", "1", "-ar", "16000", str(clip_path)])
     subprocess.run(command, check=True)
+    write_json(identity_path, identity)
     return clip_path
 
 
@@ -132,7 +145,23 @@ def run_whisperx(
     overwrite: bool,
     align_words: bool,
 ) -> Path:
-    if output_path.exists() and not overwrite and (not align_words or whisperx_has_word_timings(output_path)):
+    identity_path = output_path.with_suffix(".identity.json")
+    identity = {
+        "schema_version": "1",
+        "clip_sha256": sha256_file(clip_path),
+        "model_size": model_size,
+        "align_words": align_words,
+    }
+    try:
+        cached_identity = load_json(identity_path)
+    except (OSError, ValueError):
+        cached_identity = None
+    if (
+        output_path.exists()
+        and not overwrite
+        and cached_identity == identity
+        and (not align_words or whisperx_has_word_timings(output_path))
+    ):
         return output_path
 
     require_asr_dependencies()
@@ -141,10 +170,10 @@ def run_whisperx(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
-    model = whisperx.load_model(model_size, device=device, compute_type=compute_type, language="en")
+    model = transcription_model(model_size, device, compute_type)
     result = model.transcribe(str(clip_path), batch_size=8, language="en")
     if align_words and result.get("segments"):
-        align_model, metadata = whisperx.load_align_model(language_code="en", device=device)
+        align_model, metadata = alignment_model(device)
         audio = whisperx.load_audio(str(clip_path))
         result = whisperx.align(
             result["segments"],
@@ -155,6 +184,7 @@ def run_whisperx(
             return_char_alignments=False,
         )
     write_json(output_path, result)
+    write_json(identity_path, identity)
     return output_path
 
 

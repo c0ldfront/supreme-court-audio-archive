@@ -23,8 +23,8 @@ def build_steps(config: PipelineConfig) -> list[PipelineStep]:
         MergeAlignmentStep(enabled=steps.merge_alignment and alignment),
         AlignOfficialWordsStep(enabled=steps.align_official_words and alignment),
         RefineSpeechGapsStep(enabled=steps.refine_speech_gaps and alignment),
-        BuildProfilesStep(enabled=steps.build_profiles),
         ApplyQaMarkersStep(enabled=steps.apply_qa_markers and config.qa.enabled and bool(config.qa.markers)),
+        BuildProfilesStep(enabled=steps.build_profiles),
         BuildViewerStep(enabled=steps.build_viewer),
     ]
 

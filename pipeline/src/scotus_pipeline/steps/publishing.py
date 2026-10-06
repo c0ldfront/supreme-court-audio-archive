@@ -8,6 +8,7 @@ from scotus_pipeline.artifacts import (
     validate_profiles_file,
 )
 from scotus_pipeline.context import PipelineContext
+from scotus_pipeline.io import copy_snapshot
 from scotus_pipeline.processors import (
     speaker_profiles,
     viewer_bundle,
@@ -30,15 +31,14 @@ class BuildProfilesStep(PipelineStep):
         return [artifacts.profiles]
 
     def inputs(self, context: PipelineContext) -> list[Path]:
-        artifacts = context.require_artifacts()
-        return [artifacts.timeline]
+        return [context.input_timeline(self.step_id)]
 
     def execute(self, context: PipelineContext) -> SpeakerProfilesProcessorResult:
         artifacts = context.require_artifacts()
         output = speaker_profiles.build_profiles(
             SpeakerProfilesProcessorInput(
                 progress=self.progress_callback(context),
-                timeline=artifacts.timeline,
+                timeline=context.input_timeline(self.step_id),
                 output=artifacts.profiles,
             )
         )
@@ -52,21 +52,23 @@ class BuildViewerStep(PipelineStep):
 
     def outputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.viewer, artifacts.public_audio]
+        return [artifacts.viewer, artifacts.public_audio, artifacts.timeline]
 
     def inputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.timeline, artifacts.profiles]
+        return [context.input_timeline(self.step_id), artifacts.profiles, artifacts.audio]
 
     def execute(self, context: PipelineContext) -> ViewerBundleProcessorResult:
         artifacts = context.require_artifacts()
         result = viewer_bundle.build_viewer_bundle(
             ViewerProcessorInput(
                 progress=self.progress_callback(context),
-                timeline=artifacts.timeline,
+                timeline=context.input_timeline(self.step_id),
                 profiles=artifacts.profiles,
                 output=artifacts.viewer,
                 public_audio=artifacts.public_audio,
             )
         )
+        copy_snapshot(context.input_timeline(self.step_id), artifacts.timeline)
+        result.outputs.append(artifacts.timeline)
         return result

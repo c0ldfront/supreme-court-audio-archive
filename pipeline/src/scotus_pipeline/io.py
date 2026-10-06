@@ -38,6 +38,13 @@ def hash_existing(paths: list[Path], *, require_all: bool = False) -> dict[str, 
     for path in paths:
         if path.exists() and path.is_file():
             hashes[str(path)] = sha256_file(path)
+        elif path.is_dir():
+            digest = hashlib.sha256()
+            for child in sorted(path.rglob("*")):
+                if child.is_file():
+                    digest.update(child.relative_to(path).as_posix().encode())
+                    digest.update(sha256_file(child).encode())
+            hashes[str(path)] = digest.hexdigest()
         elif require_all:
             raise FileNotFoundError(f"declared pipeline input does not exist: {path}")
     return hashes

@@ -22,7 +22,7 @@ class ExtractTranscriptStep(PipelineStep):
 
     def outputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.speaker_turns]
+        return [artifacts.speaker_turns, artifacts.transcript_text]
 
     def inputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()

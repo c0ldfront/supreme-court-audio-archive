@@ -35,3 +35,23 @@ class PipelineContext(BaseModel):
         if self.artifacts is None:
             raise RuntimeError("Case artifacts are unavailable; archive or select a source directory first")
         return self.artifacts
+
+    def stage_timeline(self, step_id: str) -> Path:
+        return self.require_artifacts().work_dir / "timeline" / f"{step_id}.json"
+
+    def input_timeline(self, step_id: str) -> Path:
+        from scotus_pipeline.steps.registry import build_steps
+
+        previous = self.require_artifacts().timeline
+        for step in build_steps(self.config):
+            if step.step_id == step_id:
+                return previous
+            if step.enabled and step.step_id in {
+                "build_timeline",
+                "merge_alignment",
+                "align_official_words",
+                "refine_speech_gaps",
+                "apply_qa_markers",
+            }:
+                previous = self.stage_timeline(step.step_id)
+        raise ValueError(f"Unknown step: {step_id}")

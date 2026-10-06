@@ -20,7 +20,12 @@ class ArchiveStep(PipelineStep):
     title = "Archive case audio and transcript"
 
     def outputs(self, context: PipelineContext) -> list[Path]:
-        return [context.resolve(context.config.paths.sources_dir)]
+        source = context.resolve(context.config.paths.sources_dir)
+        if context.config.case.docket:
+            from scotus_pipeline.cases import case_output_key
+
+            source /= case_output_key({}, context.config.case.docket, Path("case"))
+        return [source]
 
     def execute(self, context: PipelineContext) -> ArchiveProcessorResult:
         archive = context.config.archive

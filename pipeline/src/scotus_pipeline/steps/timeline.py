@@ -29,8 +29,7 @@ class BuildTimelineStep(PipelineStep):
     title = "Build initial timeline"
 
     def outputs(self, context: PipelineContext) -> list[Path]:
-        artifacts = context.require_artifacts()
-        return [artifacts.timeline]
+        return [context.stage_timeline(self.step_id)]
 
     def inputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
@@ -48,7 +47,7 @@ class BuildTimelineStep(PipelineStep):
                 whisperx=None,
                 diarization=None,
                 alignment=None,
-                output=artifacts.timeline,
+                output=context.stage_timeline(self.step_id),
             )
         )
         validate_timeline_file(output, audio=artifacts.audio)
@@ -61,11 +60,17 @@ class MergeAlignmentStep(PipelineStep):
 
     def outputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.merged_alignment, artifacts.timeline]
+        return [artifacts.merged_alignment, context.stage_timeline(self.step_id)]
 
     def inputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.audio, artifacts.speaker_turns, artifacts.chunk_report]
+        return [
+            artifacts.audio,
+            artifacts.metadata,
+            artifacts.speaker_turns,
+            artifacts.chunk_report,
+            *sorted((artifacts.chunk_report.parent / "chunks").glob("*.json")),
+        ]
 
     def execute(self, context: PipelineContext) -> MergeAlignmentProcessorResult:
         artifacts = context.require_artifacts()
@@ -97,7 +102,7 @@ class MergeAlignmentStep(PipelineStep):
                 whisperx=None,
                 diarization=None,
                 alignment=merged,
-                output=artifacts.timeline,
+                output=context.stage_timeline(self.step_id),
             )
         )
         validate_timeline_file(timeline, audio=artifacts.audio)
@@ -111,20 +116,23 @@ class RefineSpeechGapsStep(PipelineStep):
     title = "Refine speech and non-speech regions"
 
     def outputs(self, context: PipelineContext) -> list[Path]:
-        artifacts = context.require_artifacts()
-        return [artifacts.timeline]
+        return [context.stage_timeline(self.step_id)]
 
     def inputs(self, context: PipelineContext) -> list[Path]:
         artifacts = context.require_artifacts()
-        return [artifacts.timeline, artifacts.official_word_alignment]
+        return [
+            context.input_timeline(self.step_id),
+            artifacts.official_word_alignment,
+            *sorted((artifacts.cache_dir / "asr").glob("*.whisperx.json")),
+        ]
 
     def execute(self, context: PipelineContext) -> TimelineProcessorResult:
         artifacts = context.require_artifacts()
         output = speech_gaps.refine_timeline(
             SpeechGapsProcessorInput(
                 progress=self.progress_callback(context),
-                timeline=artifacts.timeline,
-                output=artifacts.timeline,
+                timeline=context.input_timeline(self.step_id),
+                output=context.stage_timeline(self.step_id),
                 cache_dir=artifacts.cache_dir / "asr",
                 whisperx=None,
                 merge_gap_seconds=0.8,

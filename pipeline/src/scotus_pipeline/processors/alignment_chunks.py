@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
-import concurrent.futures
 import json
 import shutil
 import subprocess
@@ -124,7 +122,7 @@ def alignment_output_path(output_dir: Path, start: float, end: float) -> Path:
 
 
 def chunk_cache_key(
-    args: argparse.Namespace, audio_path: Path, speaker_turns_path: Path | None
+    args: AlignmentChunksProcessorInput, audio_path: Path, speaker_turns_path: Path | None
 ) -> dict[str, Any]:
     return {
         "audio_sha256": sha256_file(audio_path) if audio_path.exists() else None,
@@ -141,7 +139,7 @@ def chunk_cache_key(
 
 
 def run_chunk(
-    args: argparse.Namespace,
+    args: AlignmentChunksProcessorInput,
     case_dir: Path,
     audio_path: Path,
     start: float,
@@ -205,7 +203,7 @@ def run_chunk(
 
 def validate_existing_chunk(
     path: Path,
-    args: argparse.Namespace,
+    args: AlignmentChunksProcessorInput,
     audio_path: Path,
     start: float,
     end: float,
@@ -291,7 +289,7 @@ def summarize_alignment(path: Path, max_bad_ratio: float) -> dict[str, Any]:
 
 
 def build_report_payload(
-    args: argparse.Namespace,
+    args: AlignmentChunksProcessorInput,
     metadata: dict[str, Any],
     metadata_path: Path,
     audio_path: Path,
@@ -323,7 +321,7 @@ def build_report_payload(
             "dry_run": args.dry_run,
             "stop_on_warning": args.stop_on_warning,
             "overwrite": args.overwrite,
-            "workers": args.workers,
+            "workers": 1,
         },
         "summary": {
             "planned_chunks": len(windows),
@@ -335,7 +333,7 @@ def build_report_payload(
 
 
 def write_progress_report(
-    args: argparse.Namespace,
+    args: AlignmentChunksProcessorInput,
     metadata: dict[str, Any],
     metadata_path: Path,
     audio_path: Path,
@@ -350,7 +348,7 @@ def write_progress_report(
 
 
 def planned_chunk(
-    args: argparse.Namespace,
+    args: AlignmentChunksProcessorInput,
     segments: list[dict[str, Any]],
     audio_path: Path,
     chunk_index: int,
@@ -376,7 +374,7 @@ def planned_chunk(
 
 
 def process_chunk(
-    args: argparse.Namespace,
+    args: AlignmentChunksProcessorInput,
     case_dir: Path,
     audio_path: Path,
     chunk: dict[str, Any],
@@ -477,7 +475,9 @@ def build_report(args: AlignmentChunksProcessorInput) -> Path:
 
     if getattr(args, "use_asr_worker", False):
         stderr_path = args.cache_dir / "asr-worker.stderr.log"
-        with AsrWorkerClient(cwd=Path.cwd(), stderr_path=stderr_path) as client:
+        with AsrWorkerClient(
+            cwd=Path.cwd(), stderr_path=stderr_path, request_timeout_seconds=args.request_timeout_seconds
+        ) as client:
             for chunk in planned_chunks:
                 completed = process_chunk(args, case_dir, audio_path, chunk, client)
                 chunks.append(completed)
@@ -489,29 +489,13 @@ def build_report(args: AlignmentChunksProcessorInput) -> Path:
                     break
         return report_path
 
-    if args.stop_on_warning or args.workers == 1:
-        for chunk in planned_chunks:
-            completed = process_chunk(args, case_dir, audio_path, chunk)
-            chunks.append(completed)
-            print_chunk_progress(args, completed, len(chunks), len(planned_chunks))
-            report_path = write_progress_report(
-                args, metadata, metadata_path, audio_path, timeline_path, windows, chunks
-            )
-            if completed.get("quality") in {"warning", "error"} and args.stop_on_warning:
-                break
-        return report_path
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-        futures = {
-            executor.submit(process_chunk, args, case_dir, audio_path, chunk): chunk
-            for chunk in planned_chunks
-        }
-        for future in concurrent.futures.as_completed(futures):
-            completed = future.result()
-            chunks.append(completed)
-            print_chunk_progress(args, completed, len(chunks), len(planned_chunks))
-            report_path = write_progress_report(
-                args, metadata, metadata_path, audio_path, timeline_path, windows, chunks
-            )
-
+    for chunk in planned_chunks:
+        completed = process_chunk(args, case_dir, audio_path, chunk)
+        chunks.append(completed)
+        print_chunk_progress(args, completed, len(chunks), len(planned_chunks))
+        report_path = write_progress_report(
+            args, metadata, metadata_path, audio_path, timeline_path, windows, chunks
+        )
+        if completed.get("quality") in {"warning", "error"} and args.stop_on_warning:
+            break
     return report_path
