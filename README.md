@@ -78,7 +78,6 @@ case data is not bundled into source control.
 | `viewer/src/` | Astro components and browser code |
 | `viewer/scripts/`, `viewer/tests/` | Case packaging and integration tests |
 | `docs/` | Architecture, operation, and release notes |
-| `.github/workflows/` | Python and frontend checks |
 
 Runtime data is ignored: `.courts/` holds sources, cache, working artifacts,
 logs, and state; `output/<docket>/` holds bundles and generated sites.
@@ -87,8 +86,8 @@ logs, and state; `output/<docket>/` holds bundles and generated sites.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and contribution conventions.
 The tests use temporary synthetic fixtures and do not download court recordings
-or speech models. CI also builds and installs the Python wheel to exercise the
-packaged CLI and config template.
+or speech models. Run the checks locally using the commands in the contribution
+guide.
 
 - [Pipeline usage](pipeline/README.md)
 - [Viewer usage](viewer/README.md)
