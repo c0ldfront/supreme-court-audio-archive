@@ -24,12 +24,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.io import atomic_write_json
 from scotus_pipeline.processors.contracts import ArchiveProcessorInput
 
 BASE_URL = "https://www.supremecourt.gov"
 ARGUMENT_AUDIO_URL = f"{BASE_URL}/oral_arguments/argument_audio"
-USER_AGENT = "supreme-court-ingest/1.0 (+https://www.supremecourt.gov/)"
+USER_AGENT = "scotus-pipeline/0.1 (+https://www.supremecourt.gov/)"
 
 
 @dataclass(frozen=True)

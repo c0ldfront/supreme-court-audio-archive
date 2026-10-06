@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from scotus_pipeline.config import NotificationConfig, PipelineConfig
+from scotus_pipeline.config import NotificationConfig, NotificationType, PipelineConfig
 from scotus_pipeline.context import (
     PipelineContext,
     build_artifacts_from_case_dir,
@@ -15,7 +15,7 @@ from scotus_pipeline.context import (
 from scotus_pipeline.events import EventBus, EventType, Severity
 from scotus_pipeline.models import StepStatus
 from scotus_pipeline.notifications import build_notifiers
-from scotus_pipeline.state import StateStore
+from scotus_pipeline.state import PipelineState, StateStore
 from scotus_pipeline.steps.base import PipelineStep
 from scotus_pipeline.steps.case_steps import (
     AlignOfficialWordsStep,
@@ -38,11 +38,21 @@ class PipelineRunner:
         self.workspace = self._resolve_workspace(config.project.workspace)
         self.case_key = self._case_key(config)
         self.event_bus = EventBus()
-        for notifier in build_notifiers(self._resolve_notification_paths(config.notifications)):
+        notification_configs = [
+            item
+            for item in config.notifications
+            if (not dry_run or item.type == NotificationType.console)
+            and (not config.runtime.quiet or item.type != NotificationType.console)
+        ]
+        for notifier in build_notifiers(self._resolve_notification_paths(notification_configs)):
             self.event_bus.subscribe(notifier.notify)
         state_path = self.workspace / config.paths.runs_dir / self.case_key / "state.json"
         self.state_store = StateStore(state_path)
-        self.state = self.state_store.load_or_create(run_id=uuid4().hex, config_path=self.config_path)
+        self.state = (
+            PipelineState(run_id=uuid4().hex, config_path=self.config_path)
+            if dry_run
+            else self.state_store.load_or_create(run_id=uuid4().hex, config_path=self.config_path)
+        )
         self.context = PipelineContext(
             config=config,
             workspace=self.workspace,
@@ -56,12 +66,6 @@ class PipelineRunner:
         if workspace.is_absolute():
             return workspace.resolve()
         return (self.config_path.parent / workspace).resolve()
-
-    def _state_stem(self, config: PipelineConfig) -> str:
-        case_token = config.case.docket or (config.case.case_dir.name if config.case.case_dir else "case")
-        term_token = "-".join(str(term) for term in config.case.term) or "any-term"
-        raw = f"{config.project.name}.{case_token}.{term_token}"
-        return "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in raw)
 
     def _case_key(self, config: PipelineConfig) -> str:
         return case_output_key({}, config.case.docket, config.case.case_dir or Path("case"))
@@ -116,10 +120,12 @@ class PipelineRunner:
         return planned
 
     def run(self, *, only_step: str | None = None, from_step: str | None = None) -> int:
+        if self.context.dry_run:
+            return self._dry_run(only_step=only_step, from_step=from_step)
         previous_cwd = Path.cwd()
-        os.chdir(self.workspace)
         started = dt.datetime.now(dt.UTC)
         try:
+            os.chdir(self.workspace)
             steps = self._filter_steps(self.steps(), only_step=only_step, from_step=from_step)
             self._prepare_artifacts_for_run(steps)
             self.event_bus.emit(
@@ -215,12 +221,25 @@ class PipelineRunner:
         except Exception as exc:
             self.event_bus.emit(
                 EventType.pipeline_failed,
-                str(exc),
+                str(exc) or type(exc).__name__,
                 severity=Severity.error,
             )
             return 1
         finally:
             os.chdir(previous_cwd)
+
+    def _dry_run(self, *, only_step: str | None, from_step: str | None) -> int:
+        steps = self._filter_steps(self.steps(), only_step=only_step, from_step=from_step)
+        self.event_bus.emit(EventType.pipeline_started, "Dry run", data={"total_steps": len(steps)})
+        for step in steps:
+            self.event_bus.emit(
+                EventType.step_output,
+                f"{'Would run' if step.enabled else 'Disabled'}: {step.title}",
+                step_id=step.step_id,
+                data={"dry_run": True, "enabled": step.enabled},
+            )
+        self.event_bus.emit(EventType.pipeline_completed, "Dry run complete; no artifacts written")
+        return 0
 
     def _prepare_artifacts_for_run(self, steps: list[PipelineStep]) -> None:
         if self.config.case.case_dir:
@@ -252,8 +271,13 @@ class PipelineRunner:
         only_step: str | None,
         from_step: str | None,
     ) -> list[PipelineStep]:
+        if only_step and from_step:
+            raise ValueError("use only one of --only-step and --from-step")
         if only_step:
-            return [step for step in steps if step.step_id == only_step]
+            selected = [step for step in steps if step.step_id == only_step]
+            if not selected:
+                raise ValueError(f"unknown step: {only_step}")
+            return selected
         if from_step:
             for index, step in enumerate(steps):
                 if step.step_id == from_step:

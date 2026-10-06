@@ -19,6 +19,9 @@ class PipelineState(BaseModel):
     steps: dict[str, StepResult] = Field(default_factory=dict)
 
     def record(self, result: StepResult) -> None:
+        previous = self.steps.get(result.step_id)
+        if result.status == StepStatus.skipped and previous and previous.status == StepStatus.succeeded:
+            return
         self.steps[result.step_id] = result
         self.updated_at = dt.datetime.now(dt.UTC).isoformat()
 

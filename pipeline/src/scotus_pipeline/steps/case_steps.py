@@ -13,7 +13,8 @@ from scotus_pipeline.artifacts import (
 )
 from scotus_pipeline.context import PipelineContext
 from scotus_pipeline.events import EventType, Severity
-from scotus_pipeline.processors._native import (
+from scotus_pipeline.io import atomic_write_json, atomic_write_text
+from scotus_pipeline.processors import (
     alignment_chunks,
     archive_audio,
     build_timeline,
@@ -25,7 +26,6 @@ from scotus_pipeline.processors._native import (
     speech_gaps,
     viewer_bundle,
 )
-from scotus_pipeline.processors._native._io import atomic_write_json, atomic_write_text
 from scotus_pipeline.processors.contracts import (
     AlignmentChunksProcessorInput,
     AlignmentChunksProcessorResult,
@@ -233,6 +233,14 @@ class RunAlignmentStep(PipelineStep):
         if error_count:
             validation_metadata["first_error"] = first_chunk_error(report)
             return False, f"alignment failed: {error_count} chunk(s) errored", validation_metadata
+        warning_count = int(quality_counts.get("warning", 0) or 0)
+        if warning_count:
+            message = f"Alignment quality warnings in {warning_count}/{planned} chunks; review timings before publication"
+            context.event_bus.emit(
+                EventType.step_output, message, severity=Severity.warning, step_id=self.step_id
+            )
+            if context.config.alignment.stop_on_warning:
+                return False, message, validation_metadata
         return True, None, validation_metadata
 
 
@@ -282,7 +290,9 @@ class MergeAlignmentStep(PipelineStep):
             )
         )
         validate_timeline_file(timeline, audio=context.artifacts.audio)
-        return MergeAlignmentProcessorResult(merged_alignment=merged, timeline=timeline, outputs=[merged, timeline])
+        return MergeAlignmentProcessorResult(
+            merged_alignment=merged, timeline=timeline, outputs=[merged, timeline]
+        )
 
 
 class AlignOfficialWordsStep(PipelineStep):

@@ -32,6 +32,7 @@ class PipelineContext(BaseModel):
     def read_json(self, path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
 
+
 def build_artifacts_from_case_dir(context: PipelineContext, case_dir: Path) -> CaseArtifacts:
     case_dir = context.resolve(case_dir)
     metadata_path = case_dir / "metadata.json"

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.io import atomic_write_json
 from scotus_pipeline.processors.contracts import QaMarkersProcessorInput
 
 
@@ -170,7 +170,9 @@ def calibrate_segment(
     return revised, flags
 
 
-def enforce_order(segments: list[dict[str, Any]], min_gap: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def enforce_order(
+    segments: list[dict[str, Any]], min_gap: float
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     ordered: list[dict[str, Any]] = []
     flags: list[dict[str, Any]] = []
     for segment in segments:

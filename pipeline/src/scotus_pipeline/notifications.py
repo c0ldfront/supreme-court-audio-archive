@@ -169,7 +169,5 @@ def build_notifiers(configs: list[NotificationConfig]) -> list[Notifier]:
             notifiers.append(JsonlNotifier(config.path, min_level=min_level))
         elif config.type == NotificationType.webhook:
             assert config.url is not None
-            notifiers.append(
-                WebhookNotifier(config.url, config.timeout_seconds, min_level=min_level)
-            )
+            notifiers.append(WebhookNotifier(config.url, config.timeout_seconds, min_level=min_level))
     return notifiers

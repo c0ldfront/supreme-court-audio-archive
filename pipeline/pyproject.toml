@@ -1,6 +1,7 @@
 [project]
 name = "scotus-pipeline"
 version = "0.1.0"
+readme = "README.md"
 description = "Typed, configurable Supreme Court case processing pipeline."
 requires-python = ">=3.12,<3.13"
 dependencies = [

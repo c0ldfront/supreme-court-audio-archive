@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.io import atomic_write_json
 from scotus_pipeline.processors.contracts import SpeakerProfilesProcessorInput
 
 SCOTUS_BIOGRAPHIES_URL = "https://www.supremecourt.gov/about/biographies.aspx"
@@ -148,7 +148,9 @@ def speaker_color(timeline_speakers: list[dict[str, Any]], speaker: str, fallbac
     return palette[fallback_index % len(palette)]
 
 
-def build_profile(speaker: str, timeline_speakers: list[dict[str, Any]], stats: dict[str, Any], index: int) -> dict[str, Any]:
+def build_profile(
+    speaker: str, timeline_speakers: list[dict[str, Any]], stats: dict[str, Any], index: int
+) -> dict[str, Any]:
     role = role_for_speaker(speaker)
     color = speaker_color(timeline_speakers, speaker, index)
 
@@ -207,7 +209,9 @@ def build_profiles(args: SpeakerProfilesProcessorInput) -> Path:
 
     ids = sorted({str(segment.get("speaker")) for segment in segments if segment.get("speaker")})
     stats = segment_stats(segments)
-    profiles = [build_profile(speaker, speakers, stats.get(speaker, {}), index) for index, speaker in enumerate(ids)]
+    profiles = [
+        build_profile(speaker, speakers, stats.get(speaker, {}), index) for index, speaker in enumerate(ids)
+    ]
 
     case = timeline.get("case", {}) if isinstance(timeline, dict) else {}
     output = args.output

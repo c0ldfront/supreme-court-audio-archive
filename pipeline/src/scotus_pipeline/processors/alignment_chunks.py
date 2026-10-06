@@ -16,8 +16,8 @@ from typing import Any
 
 from scotus_pipeline.asr.client import AsrWorkerClient
 from scotus_pipeline.asr.types import WorkerRequest
-from scotus_pipeline.processors._native import align_transcript
-from scotus_pipeline.processors._native._io import atomic_write_json, sha256_file
+from scotus_pipeline.io import atomic_write_json, sha256_file
+from scotus_pipeline.processors import align_transcript
 from scotus_pipeline.processors.contracts import AlignmentChunksProcessorInput, AlignTranscriptProcessorInput
 
 GOOD_STATUSES = {"matched", "partial_clip", "low_confidence"}
@@ -123,11 +123,15 @@ def alignment_output_path(output_dir: Path, start: float, end: float) -> Path:
     return output_dir / "chunks" / f"{label}.json"
 
 
-def chunk_cache_key(args: argparse.Namespace, audio_path: Path, speaker_turns_path: Path | None) -> dict[str, Any]:
+def chunk_cache_key(
+    args: argparse.Namespace, audio_path: Path, speaker_turns_path: Path | None
+) -> dict[str, Any]:
     return {
         "audio_sha256": sha256_file(audio_path) if audio_path.exists() else None,
         "speaker_turns_sha256": (
-            sha256_file(speaker_turns_path) if speaker_turns_path is not None and speaker_turns_path.exists() else None
+            sha256_file(speaker_turns_path)
+            if speaker_turns_path is not None and speaker_turns_path.exists()
+            else None
         ),
         "model_size": args.model_size,
         "chunk_seconds": args.chunk_seconds,
@@ -467,7 +471,9 @@ def build_report(args: AlignmentChunksProcessorInput) -> Path:
     ]
     chunks: list[dict[str, Any]] = []
 
-    report_path = write_progress_report(args, metadata, metadata_path, audio_path, timeline_path, windows, chunks)
+    report_path = write_progress_report(
+        args, metadata, metadata_path, audio_path, timeline_path, windows, chunks
+    )
 
     if getattr(args, "use_asr_worker", False):
         stderr_path = args.cache_dir / "asr-worker.stderr.log"

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from scotus_pipeline.artifacts import SpeakerProfilesV1, TimelineV1, ViewerBundleV1
-from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.io import atomic_write_json
 from scotus_pipeline.processors.contracts import ViewerBundleProcessorResult, ViewerProcessorInput
 
 PATH_KEYS = {

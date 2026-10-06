@@ -13,7 +13,7 @@ from scotus_pipeline.asr.client import AsrWorkerClient
 from scotus_pipeline.asr.types import WorkerRequest
 from scotus_pipeline.io import atomic_write_json, sha256_file
 from scotus_pipeline.models import StepResult, StepStatus
-from scotus_pipeline.processors._native import official_words
+from scotus_pipeline.processors import official_words
 from scotus_pipeline.processors.contracts import OfficialWordsProcessorInput
 from scotus_pipeline.state import PipelineState
 
@@ -136,9 +136,7 @@ class PipelineContractTests(unittest.TestCase):
                 )
             )
 
-            self.assertTrue(
-                state.completed("sample", input_hashes=input_hashes, output_hashes=output_hashes)
-            )
+            self.assertTrue(state.completed("sample", input_hashes=input_hashes, output_hashes=output_hashes))
 
             input_path.write_text("changed", encoding="utf-8")
             changed_hashes = {str(input_path): sha256_file(input_path)}

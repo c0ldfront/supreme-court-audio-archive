@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from scotus_pipeline.asr.dependencies import require_asr_dependencies
-from scotus_pipeline.processors._native._io import atomic_write_json, path_identity, sha256_file
+from scotus_pipeline.io import atomic_write_json, path_identity, sha256_file
 from scotus_pipeline.processors.contracts import OfficialWordsProcessorInput
 
 TOKEN_RE = re.compile(r"\S+")
@@ -168,7 +168,9 @@ def build_blocks(
 
         if selected:
             turn_indexes = [int(segment["turn_index"]) for segment in selected]
-            tokens = [token for turn_index in turn_indexes for token in token_index_by_turn.get(turn_index, [])]
+            tokens = [
+                token for turn_index in turn_indexes for token in token_index_by_turn.get(turn_index, [])
+            ]
             if tokens:
                 text = " ".join(token.word for token in tokens)
                 blocks.append(
@@ -351,7 +353,9 @@ def build_word_candidates(
                 interpolate_method=args.interpolate_method,
                 return_char_alignments=False,
             )
-            aligned_words = valid_aligned_words(aligned.get("word_segments", []) if isinstance(aligned, dict) else [])
+            aligned_words = valid_aligned_words(
+                aligned.get("word_segments", []) if isinstance(aligned, dict) else []
+            )
             candidates, mapping = match_aligned_words_to_tokens(block, aligned_words, args)
             for global_index, candidate in candidates.items():
                 existing = all_candidates.get(global_index)
@@ -746,12 +750,16 @@ def normalize_turn_alignment(
     return result
 
 
-def build_block_word_alignment(timeline: dict[str, Any], audio_path: Path, args: argparse.Namespace) -> dict[str, Any]:
+def build_block_word_alignment(
+    timeline: dict[str, Any], audio_path: Path, args: argparse.Namespace
+) -> dict[str, Any]:
     segments = iter_timeline_segments(timeline)
     candidates, block_reports, runtime = build_word_candidates(timeline, audio_path, args)
     tokens_by_turn = build_turn_tokens(segments)
     turns = [
-        normalize_turn_alignment(segment, tokens_by_turn.get(int(segment["turn_index"]), []), candidates, args)
+        normalize_turn_alignment(
+            segment, tokens_by_turn.get(int(segment["turn_index"]), []), candidates, args
+        )
         for segment in segments
         if segment.get("turn_index") is not None
     ]
@@ -794,19 +802,25 @@ def build_block_word_alignment(timeline: dict[str, Any], audio_path: Path, args:
                 "aligned": len(mapped_blocks),
                 "error": sum(1 for block in block_reports if block.get("status") == "error"),
             },
-            "mean_block_mapped_token_ratio": round(statistics.fmean(mapped_ratios), 4) if mapped_ratios else 0.0,
+            "mean_block_mapped_token_ratio": round(statistics.fmean(mapped_ratios), 4)
+            if mapped_ratios
+            else 0.0,
         },
         "blocks": block_reports,
         "turns": turns,
     }
 
 
-def build_asr_word_alignment(timeline: dict[str, Any], audio_path: Path, args: argparse.Namespace) -> dict[str, Any]:
+def build_asr_word_alignment(
+    timeline: dict[str, Any], audio_path: Path, args: argparse.Namespace
+) -> dict[str, Any]:
     segments = iter_timeline_segments(timeline)
     candidates, asr_summary = build_asr_word_candidates(timeline, args)
     tokens_by_turn = build_turn_tokens(segments)
     turns = [
-        normalize_turn_alignment(segment, tokens_by_turn.get(int(segment["turn_index"]), []), candidates, args)
+        normalize_turn_alignment(
+            segment, tokens_by_turn.get(int(segment["turn_index"]), []), candidates, args
+        )
         for segment in segments
         if segment.get("turn_index") is not None
     ]
@@ -840,7 +854,9 @@ def build_asr_word_alignment(timeline: dict[str, Any], audio_path: Path, args: a
     }
 
 
-def build_word_alignment(timeline: dict[str, Any], audio_path: Path, args: argparse.Namespace) -> dict[str, Any]:
+def build_word_alignment(
+    timeline: dict[str, Any], audio_path: Path, args: argparse.Namespace
+) -> dict[str, Any]:
     if args.method == "block":
         return build_block_word_alignment(timeline, audio_path, args)
     return build_asr_word_alignment(timeline, audio_path, args)
@@ -887,7 +903,9 @@ def alignment_matches_current_inputs(
     )
 
 
-def apply_word_alignment(timeline: dict[str, Any], alignment: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+def apply_word_alignment(
+    timeline: dict[str, Any], alignment: dict[str, Any], args: argparse.Namespace
+) -> dict[str, Any]:
     turns = alignment.get("turns", []) if isinstance(alignment, dict) else []
     by_index = {
         int(turn["turn_index"]): turn
@@ -912,9 +930,16 @@ def apply_word_alignment(timeline: dict[str, Any], alignment: dict[str, Any], ar
             reject_reason = "missing_word_alignment"
         elif aligned.get("status") not in accepted_statuses:
             reject_reason = f"word_alignment_{aligned.get('status')}"
-        elif alignment_score is not None and float(alignment_score) < args.min_apply_mean_word_score and not args.apply_low_quality:
+        elif (
+            alignment_score is not None
+            and float(alignment_score) < args.min_apply_mean_word_score
+            and not args.apply_low_quality
+        ):
             reject_reason = "word_alignment_low_apply_score"
-        elif previous_applied_end is not None and float(aligned["start"]) < previous_applied_end - args.max_turn_overlap_seconds:
+        elif (
+            previous_applied_end is not None
+            and float(aligned["start"]) < previous_applied_end - args.max_turn_overlap_seconds
+        ):
             reject_reason = "word_alignment_out_of_order"
 
         if reject_reason:
@@ -956,7 +981,9 @@ def apply_word_alignment(timeline: dict[str, Any], alignment: dict[str, Any], ar
         applied += 1
         previous_applied_end = max(previous_applied_end or 0.0, end)
 
-    updated_segments, fallback_adjustments = constrain_fallback_segments(updated_segments, timing_method, args)
+    updated_segments, fallback_adjustments = constrain_fallback_segments(
+        updated_segments, timing_method, args
+    )
     qa_flags.extend(fallback_adjustments)
     timeline["segments"] = updated_segments
     timeline["created_at"] = datetime.now(UTC).isoformat()
@@ -978,7 +1005,11 @@ def apply_word_alignment(timeline: dict[str, Any], alignment: dict[str, Any], ar
 
 def is_applied_word_aligned(segment: dict[str, Any], timing_method: str) -> bool:
     source = segment.get("source")
-    return isinstance(source, dict) and source.get("timing") == timing_method and source.get("word_alignment_status") == "aligned"
+    return (
+        isinstance(source, dict)
+        and source.get("timing") == timing_method
+        and source.get("word_alignment_status") == "aligned"
+    )
 
 
 def rescale_words(segment: dict[str, Any], new_start: float, new_end: float) -> list[dict[str, Any]]:
@@ -1023,7 +1054,10 @@ def redistribute_group(
     args: argparse.Namespace,
 ) -> list[dict[str, Any]]:
     available = max(0.0, window_end - window_start)
-    weights = [max(1, int(segment.get("word_count") or len(str(segment.get("text", "")).split()) or 1)) for segment in group]
+    weights = [
+        max(1, int(segment.get("word_count") or len(str(segment.get("text", "")).split()) or 1))
+        for segment in group
+    ]
     total_weight = max(1, sum(weights))
     cursor = window_start
     revised: list[dict[str, Any]] = []
@@ -1094,7 +1128,14 @@ def constrain_fallback_segments(
                 revised.append(candidate)
             index += 1
 
-        previous_aligned = next((item for item in reversed(revised) if isinstance(item, dict) and is_applied_word_aligned(item, timing_method)), None)
+        previous_aligned = next(
+            (
+                item
+                for item in reversed(revised)
+                if isinstance(item, dict) and is_applied_word_aligned(item, timing_method)
+            ),
+            None,
+        )
         next_aligned = next(
             (
                 item

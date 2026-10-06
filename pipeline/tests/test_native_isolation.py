@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from scotus_pipeline.processors._native import alignment_chunks
+from scotus_pipeline.processors import alignment_chunks
 from scotus_pipeline.processors.contracts import AlignmentChunksProcessorInput
 
 
@@ -32,7 +32,7 @@ class NativeIsolationTests(unittest.TestCase):
             expected_turns.parent.mkdir(parents=True)
             audio_path.write_bytes(b"fake-audio")
             expected_turns.write_text("[]\n", encoding="utf-8")
-            stale_turns.write_text("[{\"text\":\"old\"}]\n", encoding="utf-8")
+            stale_turns.write_text('[{"text":"old"}]\n', encoding="utf-8")
             args = AlignmentChunksProcessorInput(
                 case_dir=root,
                 metadata=None,
@@ -62,7 +62,9 @@ class NativeIsolationTests(unittest.TestCase):
             )
 
             self.assertFalse(
-                alignment_chunks.validate_existing_chunk(chunk_path, args, audio_path, 0.0, 10.0, 0, 2, expected_turns)
+                alignment_chunks.validate_existing_chunk(
+                    chunk_path, args, audio_path, 0.0, 10.0, 0, 2, expected_turns
+                )
             )
 
             payload = json.loads(chunk_path.read_text(encoding="utf-8"))
@@ -70,7 +72,9 @@ class NativeIsolationTests(unittest.TestCase):
             alignment_chunks.write_json(chunk_path, payload)
 
             self.assertTrue(
-                alignment_chunks.validate_existing_chunk(chunk_path, args, audio_path, 0.0, 10.0, 0, 2, expected_turns)
+                alignment_chunks.validate_existing_chunk(
+                    chunk_path, args, audio_path, 0.0, 10.0, 0, 2, expected_turns
+                )
             )
 
 

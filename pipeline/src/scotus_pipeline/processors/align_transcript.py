@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from scotus_pipeline.asr.dependencies import require_asr_dependencies
-from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.io import atomic_write_json
 from scotus_pipeline.processors.contracts import AlignTranscriptProcessorInput
 
 
@@ -81,7 +81,9 @@ def audio_duration(path: Path) -> float:
     return float(output.strip())
 
 
-def clip_audio(audio_path: Path, output_dir: Path, start: float, duration: float | None, overwrite: bool) -> Path:
+def clip_audio(
+    audio_path: Path, output_dir: Path, start: float, duration: float | None, overwrite: bool
+) -> Path:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg is required but was not found on PATH")
@@ -454,7 +456,9 @@ def refine_adjacent_boundaries(
         if previous_end >= current_start:
             continue
 
-        previous_match_tokens = [token["token"] for token in flattened_tokens[previous_start : previous_end + 1]]
+        previous_match_tokens = [
+            token["token"] for token in flattened_tokens[previous_start : previous_end + 1]
+        ]
         current_match_tokens = [token["token"] for token in flattened_tokens[current_start : current_end + 1]]
         previous_turn_tokens = tokens(str(previous.get("text", "")))
         current_turn_tokens = tokens(str(current.get("text", "")))
@@ -464,18 +468,24 @@ def refine_adjacent_boundaries(
             new_current_start = previous_end - stolen_from_current + 1
             new_previous_end = new_current_start - 1
             if new_previous_end >= previous_start:
-                rebuild_alignment_from_token_span(previous, flattened_tokens, previous_start, new_previous_end)
+                rebuild_alignment_from_token_span(
+                    previous, flattened_tokens, previous_start, new_previous_end
+                )
             rebuild_alignment_from_token_span(current, flattened_tokens, new_current_start, current_end)
             current_start = new_current_start
             previous_end = new_previous_end
-            current_match_tokens = [token["token"] for token in flattened_tokens[current_start : current_end + 1]]
+            current_match_tokens = [
+                token["token"] for token in flattened_tokens[current_start : current_end + 1]
+            ]
 
         stolen_from_previous = matching_prefix_suffix(previous_turn_tokens, current_match_tokens)
         if stolen_from_previous >= 1:
             new_previous_end = current_start + stolen_from_previous - 1
             new_current_start = new_previous_end + 1
             if new_previous_end > previous_end and new_current_start <= current_end:
-                rebuild_alignment_from_token_span(previous, flattened_tokens, previous_start, new_previous_end)
+                rebuild_alignment_from_token_span(
+                    previous, flattened_tokens, previous_start, new_previous_end
+                )
                 rebuild_alignment_from_token_span(current, flattened_tokens, new_current_start, current_end)
 
 
@@ -562,10 +572,7 @@ def align_turns(
 
 def is_better_candidate(score: dict[str, float], best_score: dict[str, float]) -> bool:
     """Prefer materially better matches, or longer near-tie prefix matches."""
-    if (
-        score["token_precision"] >= 0.7
-        and score["token_f1"] > best_score.get("token_f1", 0.0) + 0.05
-    ):
+    if score["token_precision"] >= 0.7 and score["token_f1"] > best_score.get("token_f1", 0.0) + 0.05:
         return True
     if score["score"] > best_score["score"] + 0.03:
         return True
@@ -573,7 +580,9 @@ def is_better_candidate(score: dict[str, float], best_score: dict[str, float]) -
     return near_tie and score["coverage"] > best_score["coverage"] + 0.03
 
 
-def select_turns(turns: list[dict[str, Any]], turn_start: int, turn_count: int | None) -> list[dict[str, Any]]:
+def select_turns(
+    turns: list[dict[str, Any]], turn_start: int, turn_count: int | None
+) -> list[dict[str, Any]]:
     selected = turns[turn_start:]
     if turn_count is not None:
         selected = selected[:turn_count]
@@ -611,7 +620,9 @@ def build_alignment(args: AlignTranscriptProcessorInput) -> Path:
     end = total_duration if duration is None else min(total_duration, start + duration)
     label = f"{int(start):06d}-{int(end):06d}"
     whisperx_path = args.whisperx or cache_dir / f"{label}.whisperx.json"
-    run_whisperx(clip_path, whisperx_path, args.model_size, args.overwrite, align_words=not args.no_word_alignment)
+    run_whisperx(
+        clip_path, whisperx_path, args.model_size, args.overwrite, align_words=not args.no_word_alignment
+    )
     whisperx = load_json(whisperx_path)
     whisperx_segments = whisperx.get("segments", []) if isinstance(whisperx, dict) else []
 

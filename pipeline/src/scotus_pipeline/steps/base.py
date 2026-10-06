@@ -78,6 +78,38 @@ class PipelineStep(ABC):
         return True, None, {}
 
     def run(self, context: PipelineContext) -> StepResult:
+        if not self.enabled:
+            now = dt.datetime.now(dt.UTC).isoformat()
+            context.event_bus.emit(EventType.step_skipped, "disabled by config", step_id=self.step_id)
+            return StepResult(
+                step_id=self.step_id,
+                status=StepStatus.skipped,
+                started_at=now,
+                finished_at=now,
+                duration_seconds=0.0,
+                metadata={"reason": "disabled by config"},
+            )
+        try:
+            return self._run(context)
+        except Exception as exc:
+            now = dt.datetime.now(dt.UTC).isoformat()
+            message = str(exc) or type(exc).__name__
+            context.event_bus.emit(
+                EventType.step_failed,
+                f"{self.title}: {message}",
+                step_id=self.step_id,
+                severity=Severity.error,
+            )
+            return StepResult(
+                step_id=self.step_id,
+                status=StepStatus.failed,
+                started_at=now,
+                finished_at=now,
+                duration_seconds=0.0,
+                metadata={"error": message, "traceback": traceback.format_exc().splitlines()[-20:]},
+            )
+
+    def _run(self, context: PipelineContext) -> StepResult:
         started_at = dt.datetime.now(dt.UTC).isoformat()
         start = time.monotonic()
         inputs = self.inputs(context)

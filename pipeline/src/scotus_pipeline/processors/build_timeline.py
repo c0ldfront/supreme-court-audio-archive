@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.io import atomic_write_json
 from scotus_pipeline.processors.contracts import BuildTimelineProcessorInput
 
 PALETTE = [
@@ -264,9 +264,7 @@ def smooth_unaligned_between_anchors(segments: list[dict[str, Any]], duration: f
             continue
 
         left_time = 0.0 if left_anchor == -1 else float(smoothed[left_anchor]["end"])
-        right_time = (
-            duration if right_anchor == len(smoothed) else float(smoothed[right_anchor]["start"])
-        )
+        right_time = duration if right_anchor == len(smoothed) else float(smoothed[right_anchor]["start"])
         available = max(0.0, right_time - left_time)
         run = smoothed[run_start:run_end]
         weights = [max(1, int(segment.get("word_count", 1))) for segment in run]

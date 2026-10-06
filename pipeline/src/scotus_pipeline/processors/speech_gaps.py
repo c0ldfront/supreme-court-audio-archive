@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.io import atomic_write_json
 from scotus_pipeline.processors.contracts import SpeechGapsProcessorInput
 
 WHISPERX_LABEL_RE = re.compile(r"(?P<start>\d{6})-(?P<end>\d{6})\.whisperx\.json$")
@@ -38,7 +38,9 @@ def whisperx_offset(path: Path) -> float | None:
     return float(match.group("start"))
 
 
-def resolve_whisperx_paths(timeline: dict[str, Any], cache_dir: Path, explicit: list[Path] | None) -> list[Path]:
+def resolve_whisperx_paths(
+    timeline: dict[str, Any], cache_dir: Path, explicit: list[Path] | None
+) -> list[Path]:
     if explicit:
         return [path for path in explicit if path.exists()]
 
@@ -156,7 +158,9 @@ def transcript_word_regions(segments: list[dict[str, Any]]) -> list[dict[str, An
                     "source": "official_transcript_word",
                 }
             )
-    return merge_regions(sorted(regions, key=lambda region: (float(region["start"]), float(region["end"]))), 0.05)
+    return merge_regions(
+        sorted(regions, key=lambda region: (float(region["start"]), float(region["end"]))), 0.05
+    )
 
 
 def clip_non_speech_events(
@@ -336,7 +340,9 @@ def refine_timeline(args: SpeechGapsProcessorInput) -> Path:
     events, suppressed_events = clip_non_speech_events(raw_events, word_regions, args.min_non_speech_seconds)
 
     timeline["segments"] = refined_segments
-    timeline["events"] = [event for event in timeline.get("events", []) if event.get("type") != "non_speech"] + events
+    timeline["events"] = [
+        event for event in timeline.get("events", []) if event.get("type") != "non_speech"
+    ] + events
     timeline["created_at"] = datetime.now(UTC).isoformat()
     timeline.setdefault("sources", {})["speech_regions"] = {
         "available": True,

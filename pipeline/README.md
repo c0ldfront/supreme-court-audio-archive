@@ -1,90 +1,63 @@
 # SCOTUS Pipeline
 
-The Python package processes Supreme Court oral arguments into aligned transcripts
-and viewer bundles. The older numbered-script implementation is preserved in
-`../legacy/`.
+A configurable Python CLI for archiving Supreme Court oral arguments and
+aligning official transcript turns with their audio.
 
-The pipeline is configuration-first and typed end to end:
+## Commands
 
-- Pydantic models validate pipeline configuration, case metadata, artifacts, and
-  step results.
-- Pipeline steps are Python classes with explicit inputs, outputs, validation,
-  immutable timeline snapshots, and hash-aware resume behavior.
-- Step execution calls in-package native processors under
-  `scotus_pipeline.processors._native`; there is no root-script compatibility
-  executor.
-- Progress, logging, notifications, and step lifecycle events flow through one
-  event bus.
-- TOML is supported without optional parser behavior; YAML is also supported.
-- Artifact JSON is versioned with `schema_version = "1"` and validated at the
-  step boundary to catch cross-case leakage before later stages consume it.
-- State is written as JSON so failed runs can be inspected and resumed.
-- The viewer step emits a JSON bundle for the frontend. Python no longer renders
-  the final HTML viewer.
-
-## Quick Start
+Run from `pipeline/` in a source checkout:
 
 ```bash
-cd pipeline
-uv run --with-editable . scotus-pipeline validate configs/case.example.toml
-uv run --with-editable . scotus-pipeline plan configs/case.example.toml
+uv sync --extra asr
+uv run --extra asr scotus-pipeline validate configs/case-24-624.toml
+uv run --extra asr scotus-pipeline plan configs/case-24-624.toml --json
+uv run --extra asr scotus-pipeline run configs/case-24-624.toml --dry-run
+uv run --extra asr scotus-pipeline run configs/case-24-624.toml
 ```
 
-Run against an already archived case:
+Python 3.12 is required. Processing uses `pdftotext`, `ffprobe`, and `ffmpeg`.
+Fresh WhisperX alignment uses CUDA when available and falls back to CPU. The base
+package supports planning, validation, and tests without ASR dependencies.
+
+For an installed package, invoke `scotus-pipeline` directly. Create a standalone
+config with `scotus-pipeline init-config case.toml`; the command refuses to
+overwrite an existing file. Relative `project.workspace` values are resolved
+against the configuration file's directory.
+
+## Processing and resume
 
 ```bash
-uv run --with-editable . scotus-pipeline run configs/case.example.toml \
-  --case-dir ../.courts/sources/24-109
+# Execute every enabled stage again, reusing valid processor caches.
+uv run --extra asr scotus-pipeline run configs/case-24-624.toml --no-resume
+
+# Use existing source audio, PDF, and metadata without fetching the archive.
+uv run --extra asr scotus-pipeline run configs/case-24-624.toml \
+  --case-dir ../.courts/sources/24-624
+
+# Run a single stage after its prerequisites exist.
+uv run --extra asr scotus-pipeline run configs/case-24-624.toml --only-step build_viewer
 ```
 
-Run a new docket end to end:
+`--no-resume` bypasses saved step completion; it does not discard valid WhisperX
+caches. Set `[alignment].overwrite = true` to recompute audio alignment. Return
+it to `false` afterward if you want subsequent runs to reuse those results.
+Use `--no-resume` after changing processing settings; resume currently compares
+file hashes, not the full configuration.
 
-```bash
-uv run --with-editable . scotus-pipeline validate configs/case-24-624.toml
-uv run --with-editable . scotus-pipeline plan configs/case-24-624.toml
-uv run --with-editable . scotus-pipeline run configs/case-24-624.toml --no-resume
-```
+`--from-step STEP` begins at a named stage. Unknown steps and conflicting
+selectors are errors. Disabled stages do not require their inputs to exist.
+Dry runs and plans do not write state, logs, or artifacts or send webhooks.
 
-The frontend input is written as `output/<docket>/bundle.json`, with the public
-audio copied beside it as `output/<docket>/audio.mp3`.
+## Quality and artifacts
 
-## Paths
+Alignment warnings are printed even if processing completes. Set
+`[alignment].stop_on_warning = true` to reject warning-quality output.
+Inspect `.courts/work/<docket>/alignment/chunk-report.json` for chunk results.
+The default `tiny.en` model is useful for iteration; model size is configurable.
+Processing currently serializes WhisperX chunks, regardless of `workers`.
 
-The pipeline now has two roots:
+The viewer consumes `output/<docket>/bundle.json` and its adjacent `audio.mp3`.
+All intermediate data stays in `.courts/`; case bundles remove local filesystem
+paths from published metadata.
 
-- `.courts/` for internal sources, cache, work artifacts, run state, and logs.
-- `output/<docket>/` for the viewer-facing deliverable only.
-
-For docket `24-624`, the generated bundle is:
-
-```text
-output/24-624/bundle.json
-```
-
-## Design Notes
-
-The pipeline is a self-contained package plus native processors. The CLI builds
-a typed config, resolves case artifacts, runs each native processor, emits
-structured progress/notification events, and records typed `StepResult` state
-for resume.
-
-The alignment cache is source-aware: cached chunk JSON is reused only when its
-window, audio hash, speaker-turn hash, speaker-turn source, model settings, and
-alignment thresholds match the current case. This prevents stale artifacts from
-another docket from contaminating a new viewer build.
-
-Native WhisperX chunk alignment uses a dedicated JSONL worker process by
-default. The worker keeps ASR model state outside the orchestrator, preserves
-structured progress events, and writes worker stderr to
-`.courts/cache/<docket>/asr/asr-worker.stderr.log` instead of an unread pipe.
-
-Timeline snapshots are copied under `.courts/work/<docket>/timeline/snapshots/`
-after step validation succeeds, so the public output folder never fills with
-intermediate checkpoints.
-
-Runtime system dependencies:
-
-- `pdftotext` for transcript extraction.
-- `ffprobe` for audio duration checks.
-- `ffmpeg` for chunk audio extraction.
-- `torch` and `whisperx` when ASR alignment has to compute fresh cache entries.
+See the repository's `docs/` directory for architecture and operational notes.

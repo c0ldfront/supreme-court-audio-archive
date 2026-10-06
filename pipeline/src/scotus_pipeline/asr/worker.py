@@ -6,7 +6,7 @@ from contextlib import redirect_stdout, suppress
 
 from scotus_pipeline.asr.types import WorkerRequest, WorkerResponse
 from scotus_pipeline.io import sha256_file
-from scotus_pipeline.processors._native import align_transcript
+from scotus_pipeline.processors import align_transcript
 from scotus_pipeline.processors.contracts import AlignTranscriptProcessorInput
 
 

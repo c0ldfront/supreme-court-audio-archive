@@ -10,8 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scotus_pipeline.processors._native import build_timeline
-from scotus_pipeline.processors._native._io import atomic_write_json
+from scotus_pipeline.io import atomic_write_json
+from scotus_pipeline.processors import build_timeline
 from scotus_pipeline.processors.contracts import BuildTimelineProcessorInput, MergeAlignmentProcessorInput
 
 STATUS_RANK = {
@@ -103,7 +103,9 @@ def source_for_turn(chunk_path: Path, chunk: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def merge_chunks(chunk_paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+def merge_chunks(
+    chunk_paths: list[Path],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     selected: dict[int, dict[str, Any]] = {}
     conflicts: list[dict[str, Any]] = []
     chunk_summaries: list[dict[str, Any]] = []
