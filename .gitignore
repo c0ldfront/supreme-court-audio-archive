@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.env.example.local
 .venv/
 __pycache__/
 *.py[cod]
@@ -24,3 +25,50 @@ build/
 node_modules/
 .astro/
 .case-public/
+
+# Private credentials and machine-specific configuration
+.netrc
+.npmrc
+.pypirc
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+*.local.toml
+*.local.yaml
+*.local.yml
+/case.toml
+.idea/
+.vscode/
+
+# Logs, test coverage, and local databases
+*.log
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+
+# Downloaded recordings, transcripts, and model weights
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.mp4
+*.pdf
+*.safetensors
+*.pt
+*.pth
+*.onnx
+
+# Local history backups and patch leftovers
+*.bundle
+*.orig
+*.rej
