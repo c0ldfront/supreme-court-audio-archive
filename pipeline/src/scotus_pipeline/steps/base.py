@@ -11,7 +11,7 @@ from scotus_pipeline.context import PipelineContext
 from scotus_pipeline.events import EventType, Severity
 from scotus_pipeline.io import copy_snapshot, hash_existing
 from scotus_pipeline.models import StepResult, StepStatus
-from scotus_pipeline.processors.contracts import ProcessorResult
+from scotus_pipeline.processors.contracts import ProcessorResult, ProgressCallback
 
 
 class PipelineStep(ABC):
@@ -31,7 +31,7 @@ class PipelineStep(ABC):
     def processor_name(self) -> str:
         return f"{self.__class__.__module__}.{self.__class__.__name__}"
 
-    def progress_callback(self, context: PipelineContext):
+    def progress_callback(self, context: PipelineContext) -> ProgressCallback:
         def progress(
             *,
             current: int,
@@ -59,17 +59,6 @@ class PipelineStep(ABC):
     def execute(self, context: PipelineContext) -> ProcessorResult:
         raise NotImplementedError
 
-    def should_skip(self, context: PipelineContext) -> tuple[bool, str | None]:
-        if not self.enabled:
-            return True, "disabled by config"
-        if context.config.runtime.resume and context.state.completed(
-            self.step_id,
-            input_hashes=hash_existing(self.inputs(context), require_all=True),
-            output_hashes=hash_existing(self.outputs(context)),
-        ):
-            return True, "already completed in state"
-        return False, None
-
     def validate_success(
         self,
         context: PipelineContext,
@@ -78,165 +67,90 @@ class PipelineStep(ABC):
         return True, None, {}
 
     def run(self, context: PipelineContext) -> StepResult:
-        if not self.enabled:
-            now = dt.datetime.now(dt.UTC).isoformat()
-            context.event_bus.emit(EventType.step_skipped, "disabled by config", step_id=self.step_id)
-            return StepResult(
-                step_id=self.step_id,
-                status=StepStatus.skipped,
-                started_at=now,
-                finished_at=now,
-                duration_seconds=0.0,
-                metadata={"reason": "disabled by config"},
-            )
-        try:
-            return self._run(context)
-        except Exception as exc:
-            now = dt.datetime.now(dt.UTC).isoformat()
-            message = str(exc) or type(exc).__name__
-            context.event_bus.emit(
-                EventType.step_failed,
-                f"{self.title}: {message}",
-                step_id=self.step_id,
-                severity=Severity.error,
-            )
-            return StepResult(
-                step_id=self.step_id,
-                status=StepStatus.failed,
-                started_at=now,
-                finished_at=now,
-                duration_seconds=0.0,
-                metadata={"error": message, "traceback": traceback.format_exc().splitlines()[-20:]},
-            )
-
-    def _run(self, context: PipelineContext) -> StepResult:
         started_at = dt.datetime.now(dt.UTC).isoformat()
-        start = time.monotonic()
-        inputs = self.inputs(context)
-        outputs = self.outputs(context)
-        input_hashes = hash_existing(inputs, require_all=True)
-        should_skip, reason = self.should_skip(context)
+        started = time.monotonic()
+        outputs: list[Path] = []
+        input_hashes: dict[str, str] = {}
+        output_hashes: dict[str, str] = {}
         processor = self.processor_name()
-        if should_skip:
-            context.event_bus.emit(
-                EventType.step_skipped,
-                reason or "skipped",
-                step_id=self.step_id,
-            )
+        metadata: dict[str, Any] = {"processor": processor}
+
+        def finish(status: StepStatus, *, snapshots: dict[str, Path] | None = None) -> StepResult:
             return StepResult(
                 step_id=self.step_id,
-                status=StepStatus.skipped,
+                status=status,
                 started_at=started_at,
                 finished_at=dt.datetime.now(dt.UTC).isoformat(),
-                duration_seconds=0.0,
+                duration_seconds=time.monotonic() - started,
                 outputs=outputs,
                 input_hashes=input_hashes,
-                output_hashes=hash_existing(outputs),
-                metadata={"reason": reason, "processor": processor},
+                output_hashes=output_hashes,
+                snapshots=snapshots or {},
+                metadata=metadata,
             )
 
-        context.event_bus.emit(
-            EventType.step_started,
-            self.title,
-            step_id=self.step_id,
-            data={"processor": processor},
-        )
-
-        if context.dry_run:
-            context.event_bus.emit(
-                EventType.step_completed,
-                f"{self.title} dry-run planned",
-                step_id=self.step_id,
-                data={"dry_run": True},
-            )
-            return StepResult(
-                step_id=self.step_id,
-                status=StepStatus.succeeded,
-                started_at=started_at,
-                finished_at=dt.datetime.now(dt.UTC).isoformat(),
-                duration_seconds=0.0,
-                outputs=outputs,
-                input_hashes=input_hashes,
-                metadata={"dry_run": True, "processor": processor},
-            )
-
-        try:
-            processor_result = self.execute(context)
-        except Exception as exc:
-            duration = time.monotonic() - start
-            context.event_bus.emit(
-                EventType.step_failed,
-                f"{self.title} failed: {exc}",
-                severity=Severity.error,
-                step_id=self.step_id,
-                data={"error": str(exc), "processor": processor},
-            )
-            return StepResult(
-                step_id=self.step_id,
-                status=StepStatus.failed,
-                started_at=started_at,
-                finished_at=dt.datetime.now(dt.UTC).isoformat(),
-                duration_seconds=duration,
-                outputs=outputs,
-                input_hashes=input_hashes,
-                output_hashes=hash_existing(outputs),
-                metadata={
-                    "error": str(exc),
-                    "processor": processor,
-                    "traceback": traceback.format_exc().splitlines()[-20:],
-                },
-            )
-
-        duration = time.monotonic() - start
-        metadata = {
-            "outputs": [str(path) for path in processor_result.outputs],
-            "metrics": processor_result.metrics,
-            "warnings": processor_result.warnings,
-            **processor_result.model_dump(mode="json", exclude={"outputs", "metrics", "warnings"}),
-        }
-        metadata = {"processor": processor, **metadata}
-        output_hashes = hash_existing(outputs)
-        valid, validation_error, validation_metadata = self.validate_success(context, metadata)
-        if not valid:
-            message = validation_error or f"{self.title} failed validation"
+        def fail(message: str) -> StepResult:
+            metadata["error"] = message
             context.event_bus.emit(
                 EventType.step_failed,
                 message,
                 severity=Severity.error,
                 step_id=self.step_id,
-                data=validation_metadata,
+                data=metadata,
             )
-            return StepResult(
-                step_id=self.step_id,
-                status=StepStatus.failed,
-                started_at=started_at,
-                finished_at=dt.datetime.now(dt.UTC).isoformat(),
-                duration_seconds=duration,
-                outputs=outputs,
+            return finish(StepStatus.failed)
+
+        if not self.enabled:
+            metadata["reason"] = "disabled by config"
+            context.event_bus.emit(EventType.step_skipped, metadata["reason"], step_id=self.step_id)
+            return finish(StepStatus.skipped)
+
+        try:
+            outputs = self.outputs(context)
+            input_hashes = hash_existing(self.inputs(context), require_all=True)
+            output_hashes = hash_existing(outputs)
+            if context.config.runtime.resume and context.state.completed(
+                self.step_id,
                 input_hashes=input_hashes,
                 output_hashes=output_hashes,
-                metadata={**metadata, **validation_metadata},
-            )
+            ):
+                metadata["reason"] = "already completed in state"
+                context.event_bus.emit(EventType.step_skipped, metadata["reason"], step_id=self.step_id)
+                return finish(StepStatus.skipped)
 
-        snapshots = self.write_snapshots(context, outputs)
-        context.event_bus.emit(
-            EventType.step_completed,
-            f"{self.title} completed in {duration:.1f}s",
-            step_id=self.step_id,
-            data={"duration_seconds": duration, **metadata, **validation_metadata},
-        )
-        return StepResult(
-            step_id=self.step_id,
-            status=StepStatus.succeeded,
-            started_at=started_at,
-            finished_at=dt.datetime.now(dt.UTC).isoformat(),
-            duration_seconds=duration,
-            outputs=outputs,
-            input_hashes=input_hashes,
-            output_hashes=output_hashes,
-            snapshots=snapshots,
-            metadata={**metadata, **validation_metadata},
-        )
+            context.event_bus.emit(
+                EventType.step_started, self.title, step_id=self.step_id, data={"processor": processor}
+            )
+            if context.dry_run:
+                metadata["dry_run"] = True
+                context.event_bus.emit(
+                    EventType.step_completed,
+                    f"{self.title} dry-run planned",
+                    step_id=self.step_id,
+                    data=metadata,
+                )
+                return finish(StepStatus.succeeded)
+
+            result = self.execute(context)
+            metadata.update(result.model_dump(mode="json"))
+            output_hashes = hash_existing(outputs)
+            valid, error, validation_metadata = self.validate_success(context, metadata)
+            metadata.update(validation_metadata)
+            if not valid:
+                return fail(error or f"{self.title} failed validation")
+
+            snapshots = self.write_snapshots(context, outputs)
+            duration = time.monotonic() - started
+            context.event_bus.emit(
+                EventType.step_completed,
+                f"{self.title} completed in {duration:.1f}s",
+                step_id=self.step_id,
+                data={"duration_seconds": duration, **metadata},
+            )
+            return finish(StepStatus.succeeded, snapshots=snapshots)
+        except Exception as exc:
+            metadata["traceback"] = traceback.format_exc().splitlines()[-20:]
+            return fail(str(exc) or type(exc).__name__)
 
     def write_snapshots(self, context: PipelineContext, outputs: list[Path]) -> dict[str, Path]:
         if context.artifacts is None:

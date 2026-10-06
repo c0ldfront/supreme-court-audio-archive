@@ -10,7 +10,8 @@ from scotus_pipeline.config import PipelineConfig
 from scotus_pipeline.models import StepResult, StepStatus
 from scotus_pipeline.runner import PipelineRunner
 from scotus_pipeline.state import PipelineState
-from scotus_pipeline.steps.case_steps import ExtractTranscriptStep, RunAlignmentStep
+from scotus_pipeline.steps.alignment import RunAlignmentStep
+from scotus_pipeline.steps.transcript import ExtractTranscriptStep
 
 
 class RunnerTests(unittest.TestCase):
@@ -122,6 +123,7 @@ class RunnerTests(unittest.TestCase):
                     }
                 },
             )
+            context.require_artifacts = lambda: context.artifacts
             self.assertTrue(RunAlignmentStep().validate_success(context, {})[0])
             self.assertTrue(any(event.severity == Severity.warning for event in events))
             context.config.alignment.stop_on_warning = True

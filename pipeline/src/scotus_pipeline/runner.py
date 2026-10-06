@@ -5,30 +5,15 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+from scotus_pipeline.cases import build_artifacts_from_case_dir, case_output_key, find_case_by_docket
 from scotus_pipeline.config import NotificationConfig, NotificationType, PipelineConfig
-from scotus_pipeline.context import (
-    PipelineContext,
-    build_artifacts_from_case_dir,
-    case_output_key,
-    find_case_by_docket,
-)
+from scotus_pipeline.context import PipelineContext
 from scotus_pipeline.events import EventBus, EventType, Severity
-from scotus_pipeline.models import StepStatus
+from scotus_pipeline.models import StepResult, StepStatus
 from scotus_pipeline.notifications import build_notifiers
 from scotus_pipeline.state import PipelineState, StateStore
 from scotus_pipeline.steps.base import PipelineStep
-from scotus_pipeline.steps.case_steps import (
-    AlignOfficialWordsStep,
-    ApplyQaMarkersStep,
-    ArchiveStep,
-    BuildProfilesStep,
-    BuildTimelineStep,
-    BuildViewerStep,
-    ExtractTranscriptStep,
-    MergeAlignmentStep,
-    RefineSpeechGapsStep,
-    RunAlignmentStep,
-)
+from scotus_pipeline.steps.registry import build_steps, select_steps
 
 
 class PipelineRunner:
@@ -84,20 +69,7 @@ class PipelineRunner:
         return resolved
 
     def steps(self) -> list[PipelineStep]:
-        steps = self.config.steps
-        qa_enabled = self.config.qa.enabled and bool(self.config.qa.markers)
-        return [
-            ArchiveStep(enabled=steps.archive and not self.config.case.case_dir),
-            ExtractTranscriptStep(enabled=steps.extract_transcript),
-            BuildTimelineStep(enabled=steps.build_timeline),
-            RunAlignmentStep(enabled=steps.run_alignment and self.config.alignment.enabled),
-            MergeAlignmentStep(enabled=steps.merge_alignment and self.config.alignment.enabled),
-            AlignOfficialWordsStep(enabled=steps.align_official_words and self.config.alignment.enabled),
-            RefineSpeechGapsStep(enabled=steps.refine_speech_gaps and self.config.alignment.enabled),
-            BuildProfilesStep(enabled=steps.build_profiles),
-            ApplyQaMarkersStep(enabled=steps.apply_qa_markers and qa_enabled),
-            BuildViewerStep(enabled=steps.build_viewer),
-        ]
+        return build_steps(self.config)
 
     def plan(self) -> list[dict[str, object]]:
         self._resolve_artifacts_if_possible()
@@ -126,7 +98,7 @@ class PipelineRunner:
         started = dt.datetime.now(dt.UTC)
         try:
             os.chdir(self.workspace)
-            steps = self._filter_steps(self.steps(), only_step=only_step, from_step=from_step)
+            steps = select_steps(self.steps(), only_step=only_step, from_step=from_step)
             self._prepare_artifacts_for_run(steps)
             self.event_bus.emit(
                 EventType.pipeline_started,
@@ -144,73 +116,16 @@ class PipelineRunner:
                     f"{index}/{len(steps)} {step.title}",
                     step_id=step.step_id,
                 )
-                self.event_bus.emit(
-                    EventType.step_progress,
-                    f"{index - 1}/{len(steps)} {step.title}",
-                    step_id=step.step_id,
-                    data={
-                        "completed": index - 1,
-                        "total": len(steps),
-                        "percent": ((index - 1) / max(1, len(steps))) * 100,
-                        "current_step": step.title,
-                    },
-                )
-                result = step.run(self.context)
+                self._emit_progress(index - 1, len(steps), step)
+                result = self._run_step(step)
                 if result.status == StepStatus.failed:
-                    if not self.context.dry_run:
-                        self.state.record(result)
-                        self.state_store.save(self.state)
                     self.event_bus.emit(
                         EventType.pipeline_failed,
                         f"Pipeline failed at {step.step_id}",
                         severity=Severity.error,
                     )
                     return 1
-                if step.step_id == "archive" and step.enabled and not self.context.dry_run:
-                    try:
-                        self.context.artifacts = find_case_by_docket(self.context)
-                    except FileNotFoundError as exc:
-                        failed_result = result.model_copy(
-                            update={
-                                "status": StepStatus.failed,
-                                "metadata": {
-                                    **result.metadata,
-                                    "error": str(exc),
-                                    "hint": (
-                                        "Archive completed, but no case metadata matched the configured "
-                                        "docket/term filters. Verify case.docket and case.term."
-                                    ),
-                                },
-                            }
-                        )
-                        self.state.record(failed_result)
-                        self.state_store.save(self.state)
-                        self.event_bus.emit(
-                            EventType.step_failed,
-                            str(exc),
-                            severity=Severity.error,
-                            step_id=step.step_id,
-                        )
-                        self.event_bus.emit(
-                            EventType.pipeline_failed,
-                            str(exc),
-                            severity=Severity.error,
-                        )
-                        return 1
-                if not self.context.dry_run:
-                    self.state.record(result)
-                    self.state_store.save(self.state)
-                self.event_bus.emit(
-                    EventType.step_progress,
-                    f"{index}/{len(steps)}",
-                    step_id=step.step_id,
-                    data={
-                        "completed": index,
-                        "total": len(steps),
-                        "percent": (index / max(1, len(steps))) * 100,
-                        "current_step": step.title,
-                    },
-                )
+                self._emit_progress(index, len(steps), step)
             elapsed = (dt.datetime.now(dt.UTC) - started).total_seconds()
             self.event_bus.emit(
                 EventType.pipeline_completed,
@@ -228,8 +143,47 @@ class PipelineRunner:
         finally:
             os.chdir(previous_cwd)
 
+    def _run_step(self, step: PipelineStep) -> StepResult:
+        result = step.run(self.context)
+        if step.step_id == "archive" and step.enabled and result.status != StepStatus.failed:
+            try:
+                self.context.artifacts = find_case_by_docket(self.context)
+            except FileNotFoundError as exc:
+                result = result.model_copy(
+                    update={
+                        "status": StepStatus.failed,
+                        "metadata": {
+                            **result.metadata,
+                            "error": str(exc),
+                            "hint": "Archive completed but no source matched the docket/term; check case configuration",
+                        },
+                    }
+                )
+                self.event_bus.emit(
+                    EventType.step_failed,
+                    str(exc),
+                    severity=Severity.error,
+                    step_id=step.step_id,
+                )
+        self.state.record(result)
+        self.state_store.save(self.state)
+        return result
+
+    def _emit_progress(self, completed: int, total: int, step: PipelineStep) -> None:
+        self.event_bus.emit(
+            EventType.step_progress,
+            f"{completed}/{total}",
+            step_id=step.step_id,
+            data={
+                "completed": completed,
+                "total": total,
+                "percent": completed / max(1, total) * 100,
+                "current_step": step.title,
+            },
+        )
+
     def _dry_run(self, *, only_step: str | None, from_step: str | None) -> int:
-        steps = self._filter_steps(self.steps(), only_step=only_step, from_step=from_step)
+        steps = select_steps(self.steps(), only_step=only_step, from_step=from_step)
         self.event_bus.emit(EventType.pipeline_started, "Dry run", data={"total_steps": len(steps)})
         for step in steps:
             self.event_bus.emit(
@@ -263,24 +217,3 @@ class PipelineRunner:
                 self.context.artifacts = find_case_by_docket(self.context)
         except Exception:
             return
-
-    def _filter_steps(
-        self,
-        steps: list[PipelineStep],
-        *,
-        only_step: str | None,
-        from_step: str | None,
-    ) -> list[PipelineStep]:
-        if only_step and from_step:
-            raise ValueError("use only one of --only-step and --from-step")
-        if only_step:
-            selected = [step for step in steps if step.step_id == only_step]
-            if not selected:
-                raise ValueError(f"unknown step: {only_step}")
-            return selected
-        if from_step:
-            for index, step in enumerate(steps):
-                if step.step_id == from_step:
-                    return steps[index:]
-            raise ValueError(f"unknown step: {from_step}")
-        return steps

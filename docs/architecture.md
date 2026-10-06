@@ -16,6 +16,51 @@
 - `Notifier`: strategy interface for console, JSONL, and webhook delivery.
 - `StateStore`: repository for resumable run state.
 
+## Code boundaries
+
+The CLI loads configuration and delegates execution to `PipelineRunner`.
+The runner coordinates stages and persistence; it does not perform transcript
+processing. `steps/registry.py` owns stage order, enablement, and step selection.
+
+```text
+scotus_pipeline/
+  cli.py                 # command parsing and presentation
+  config.py              # configuration validation
+  runner.py              # execution, progress, and state persistence
+  context.py             # runtime state and workspace resolution
+  cases.py               # source discovery and case artifact layout
+  steps/
+    base.py              # common execution/validation/error lifecycle
+    registry.py          # ordered stages and configuration gates
+    archive.py           # official source ingestion
+    transcript.py        # PDF extraction
+    timeline.py          # timeline construction, merge, and refinement
+    alignment.py         # alignment adapters and quality validation
+    qa.py                # reviewed timing markers
+    publishing.py        # profiles and viewer bundle
+  processors/
+    official_words/
+      service.py         # method selection, cache reuse, and output writes
+      cache.py           # input fingerprints
+      tokens.py          # transcript tokenization
+      asr.py             # matching to cached ASR words
+      blocks.py          # model-driven block alignment
+      timing.py          # coverage, scores, and interpolation
+      timeline.py        # accepted timing application and fallback constraints
+      progress.py        # processor progress callback
+  asr/                   # isolated WhisperX worker and protocol
+```
+
+Stage modules translate runtime configuration into typed processor inputs.
+Processors own the algorithms; reusable word-alignment code has no dependency
+on the CLI, runner, or step classes. `official_words.run` remains the processor
+entry point, and both cached ASR and block alignment produce the same artifact
+contract. Model imports occur only when block alignment needs inference.
+
+The common stage lifecycle computes input/output hashes once for a resume
+check. Execution and validation failures share result construction and error
+reporting, preserving elapsed time and available input hashes.
+
 ## Step Lifecycle
 
 1. Resolve case artifacts.
