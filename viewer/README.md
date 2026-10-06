@@ -1,6 +1,6 @@
-# SCOTUS Astro Viewer Playground
+# SCOTUS Viewer
 
-This is an isolated Astro static-site playground for the Supreme Court case viewer. It does not replace or modify the working Python pipeline.
+Astro frontend for Supreme Court case bundles produced by `../pipeline/`.
 
 ## Commands
 
@@ -11,15 +11,15 @@ npm run typecheck
 npm run build
 ```
 
-Build a GitHub Pages-ready static viewer for a v2 pipeline output:
+Build a GitHub Pages-ready static viewer for a pipeline output:
 
 ```bash
 npm run build:case -- 24-624
 ```
 
-That command reads `../../output/24-624/{bundle.json,audio.mp3}`, stages those
+That command reads `../output/24-624/{bundle.json,audio.mp3}`, stages those
 assets for Astro, and writes the packaged static viewer back to
-`../../output/24-624/`.
+`../output/24-624/`.
 
 For GitHub Pages project sites, set the repository base path before building:
 
@@ -42,7 +42,7 @@ npm run build:github
 ## Data Layout
 
 ```text
-../../output/<docket>/
+../output/<docket>/
   index.html
   _astro/
   bundle.json

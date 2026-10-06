@@ -231,7 +231,7 @@ def build_merged_alignment(args: MergeAlignmentProcessorInput) -> Path:
     audio_path = resolve_audio(metadata, case_dir, args.audio)
     chunk_paths = resolve_chunk_paths(args)
     if not chunk_paths:
-        raise FileNotFoundError("no chunk alignment JSON files found; run the v2 run_alignment step first")
+        raise FileNotFoundError("no chunk alignment JSON files found; run the run_alignment step first")
 
     merged_turns, conflicts, merge_metadata = merge_chunks(chunk_paths)
     status_counts = Counter(str(turn.get("status")) for turn in merged_turns)

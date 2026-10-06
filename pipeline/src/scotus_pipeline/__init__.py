@@ -1,4 +1,4 @@
-"""SCOTUS pipeline v2."""
+"""SCOTUS pipeline."""
 
 __all__ = ["__version__"]
 

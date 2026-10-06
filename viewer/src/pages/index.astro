@@ -10,7 +10,7 @@ const caseHref = `${base}cases/2025/24-109/`;
 
 <BaseLayout
   title={caseDocket ? `${caseTitle} · SCOTUS Viewer` : "SCOTUS Audio Archive"}
-  description={caseDocket ? `Static viewer for Supreme Court docket ${caseDocket}.` : "Static Supreme Court oral argument viewer archive playground."}
+  description={caseDocket ? `Static viewer for Supreme Court docket ${caseDocket}.` : "Supreme Court oral argument transcript archive."}
   bodyClass={caseDocket ? undefined : "archive-body"}
 >
   {
@@ -25,7 +25,7 @@ const caseHref = `${base}cases/2025/24-109/`;
     ) : (
       <main class="archive-shell">
         <header class="archive-hero">
-          <p class="archive-label">Astro playground</p>
+          <p class="archive-label">Supreme Court transcripts</p>
           <h1>Supreme Court audio viewers</h1>
           <p>
             Static case viewers generated from processed timeline, speaker profile, and word alignment data.

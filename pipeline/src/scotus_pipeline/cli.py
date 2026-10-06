@@ -12,7 +12,7 @@ from scotus_pipeline.runner import PipelineRunner
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the SCOTUS pipeline v2.")
+    parser = argparse.ArgumentParser(description="Run the SCOTUS pipeline.")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     validate = subcommands.add_parser("validate", help="validate a TOML/YAML pipeline config")
@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(json.dumps(plan, indent=2))
             return 0
-        table = Table(title="SCOTUS Pipeline v2 Plan")
+        table = Table(title="SCOTUS Pipeline Plan")
         table.add_column("Step")
         table.add_column("Enabled")
         table.add_column("Outputs")

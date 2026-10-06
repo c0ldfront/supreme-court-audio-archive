@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const viewerRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repoRoot = resolve(viewerRoot, "../..");
+const repoRoot = resolve(viewerRoot, "..");
 
 function argValue(name) {
   const index = process.argv.indexOf(name);

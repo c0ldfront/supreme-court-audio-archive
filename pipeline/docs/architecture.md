@@ -1,4 +1,4 @@
-# Pipeline v2 Architecture
+# Pipeline Architecture
 
 ## Core Patterns
 
@@ -33,7 +33,7 @@
 
 ## Isolation Boundary
 
-The v2 runner does not call the repository root numbered processors. Step
+The runner does not call the legacy numbered processors. Step
 classes call modules under `scotus_pipeline.processors._native` directly, and
 the CLI plan reports the processor class instead of a shell command.
 

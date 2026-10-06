@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 
-ASR_EXTRA = "scotus-pipeline-v2[asr]"
+ASR_EXTRA = "scotus-pipeline[asr]"
 
 
 def require_asr_dependencies() -> None:

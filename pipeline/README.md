@@ -1,10 +1,10 @@
-# SCOTUS Pipeline v2
+# SCOTUS Pipeline
 
-This is an isolated rewrite of the case processing pipeline. It does not modify
-or replace the current numbered processors or `run_pipeline.sh`, and the v2
-runner does not call them.
+The Python package processes Supreme Court oral arguments into aligned transcripts
+and viewer bundles. The older numbered-script implementation is preserved in
+`../legacy/`.
 
-The v2 design is configuration-first and typed end to end:
+The pipeline is configuration-first and typed end to end:
 
 - Pydantic models validate pipeline configuration, case metadata, artifacts, and
   step results.
@@ -25,10 +25,9 @@ The v2 design is configuration-first and typed end to end:
 ## Quick Start
 
 ```bash
-cd pipeline-v2
+cd pipeline
 uv run --with-editable . scotus-pipeline validate configs/case.example.toml
 uv run --with-editable . scotus-pipeline plan configs/case.example.toml
-uv run --with-editable . scotus-pipeline run configs/case.example.toml --dry-run
 ```
 
 Run against an already archived case:
@@ -41,9 +40,9 @@ uv run --with-editable . scotus-pipeline run configs/case.example.toml \
 Run a new docket end to end:
 
 ```bash
-uv run --with-editable . scotus-pipeline validate configs/my-new-case.toml
-uv run --with-editable . scotus-pipeline plan configs/my-new-case.toml
-uv run --with-editable . scotus-pipeline run configs/my-new-case.toml --no-resume
+uv run --with-editable . scotus-pipeline validate configs/case-24-624.toml
+uv run --with-editable . scotus-pipeline plan configs/case-24-624.toml
+uv run --with-editable . scotus-pipeline run configs/case-24-624.toml --no-resume
 ```
 
 The frontend input is written as `output/<docket>/bundle.json`, with the public
@@ -51,7 +50,7 @@ audio copied beside it as `output/<docket>/audio.mp3`.
 
 ## Paths
 
-Pipeline v2 now has two roots:
+The pipeline now has two roots:
 
 - `.courts/` for internal sources, cache, work artifacts, run state, and logs.
 - `output/<docket>/` for the viewer-facing deliverable only.
@@ -64,7 +63,7 @@ output/24-624/bundle.json
 
 ## Design Notes
 
-Pipeline v2 is a self-contained package plus native processors. The CLI builds
+The pipeline is a self-contained package plus native processors. The CLI builds
 a typed config, resolves case artifacts, runs each native processor, emits
 structured progress/notification events, and records typed `StepResult` state
 for resume.
